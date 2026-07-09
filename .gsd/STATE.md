@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase
-F2 COMPLETA y verificada. Build SIMD (cube.json) vs baseline: avgFps 56.8→57.6, emu% 94.8→96.1, p95 17.86→17.55; threadsOk=true (4 cores); frameHash idéntico → simdHashMatchesBaseline=true (sin regresión, THR-02). Mejora marginal por cap ~60fps (present-bound); F3 necesita fixture CPU/VU-bound. Siguiente: **F3 (JIT, camino crítico)** — requiere fork real de Play!. Paralelizables: F4 (WebGPU), F5 (OPFS).
+Prep de F3 (autónomo): añadido fixture CPU/VU-bound **vu1** (ps2sdk AFL, VU1+texturas, sin VCL) para tener margen medible de speedup. CI: build best-effort + bench continue-on-error. Cuando dé números, vu1.json (build F2) = referencia de speedup para F3. F3 real (JIT) requiere fork de Play! (acción externa) — pendiente de tu OK.
 
 ## Completed
 - 2026-07-09: `.gsd/` scaffolding desde §5 + master plan en docs/.

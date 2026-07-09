@@ -14,18 +14,18 @@ jobs:
         uses: actions/checkout@v4
       - name: Install make/git in image
         run: apk add --no-cache make git || true
-      - name: Build cube fixture
+      - name: Build fixtures (cube fatal, vu1 best-effort)
         run: |
           echo "PS2SDK=$PS2SDK"
-          cd tests/fixtures/src/cube
-          make
-          test -f cube.elf
-          ls -la cube.elf
+          mkdir -p /tmp/fixtures
+          ( cd tests/fixtures/src/cube && make && test -f cube.elf && cp cube.elf /tmp/fixtures/ )
+          ( cd tests/fixtures/src/vu1  && make && test -f vu1.elf  && cp vu1.elf  /tmp/fixtures/ ) || echo "WARN: vu1 fixture build failed (non-fatal)"
+          ls -la /tmp/fixtures
       - name: Upload fixtures
         uses: actions/upload-artifact@v4
         with:
           name: fixtures
-          path: tests/fixtures/src/cube/cube.elf
+          path: /tmp/fixtures
 
   # --- F0/F2: reproducible wasm build of Play! + PS2WEB frontend overlay ---
   build:
@@ -161,9 +161,17 @@ jobs:
         run: |
           npm install
           npx playwright install --with-deps chromium
-      - name: Run metrics harness (bench)
+      - name: Run metrics harness (cube)
         env:
           BENCH_FIXTURE: cube
+          BENCH_SECONDS: "20"
+          BENCH_WARMUP: "6"
+        run: npx playwright test -c tests/harness/playwright.harness.config.js
+      - name: Run metrics harness (vu1, CPU/VU-bound, best-effort)
+        if: hashFiles('dist/fixtures/vu1.elf') != ''
+        continue-on-error: true
+        env:
+          BENCH_FIXTURE: vu1
           BENCH_SECONDS: "20"
           BENCH_WARMUP: "6"
         run: npx playwright test -c tests/harness/playwright.harness.config.js
