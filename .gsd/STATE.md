@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase
-Prep de F3 (autónomo): añadido fixture CPU/VU-bound **vu1** (ps2sdk AFL, VU1+texturas, sin VCL) para tener margen medible de speedup. CI: build best-effort + bench continue-on-error. Cuando dé números, vu1.json (build F2) = referencia de speedup para F3. F3 real (JIT) requiere fork de Play! (acción externa) — pendiente de tu OK.
+F3 W1 (diseño) DONE → docs/JIT-DESIGN.md (checkpoint type=decision). Prep hecho: fixture vu1 (CPU/VU-bound) compila en CI (cube.elf 174KB, vu1.elf 229KB). F3 W2 (implementación del JIT) está GATED por: (i) OK humano al diseño, (ii) fork real de jpd002/Play- en Wcoach24 (acción externa). Referencia de speedup = vu1 sobre build F2.
 
 ## Completed
 - 2026-07-09: `.gsd/` scaffolding desde §5 + master plan en docs/.
@@ -19,6 +19,9 @@ Prep de F3 (autónomo): añadido fixture CPU/VU-bound **vu1** (ps2sdk AFL, VU1+t
 
 - 2026-07-09: F2 COMPLETA — SIMD build cube 57.6fps/96.1%, threadsOk(4c), hash==baseline (sin regresión). Ver bench/results/cube.json.
 - 2026-07-09: F2 — pool pthreads 2→8; memoria fija -sINITIAL_MEMORY=1GB (quita ALLOW_MEMORY_GROWTH, D5); -msimd128 global (D4). ALLOW_TABLE_GROWTH intacto (JIT). Cambios vía tools/apply_f2_flags.sh (sed) en CI; fork real diferido a F3.
+
+- 2026-07-09: F3 W1 — JIT-DESIGN.md. Palancas en orden: (1) batching de compilación (MemoryFunction/BasicBlock), (2) chaining sin SMC vía WebAssembly.Table (bucle dispatch residente en wasm 2a + sucesor directo 2b; toca CCodeGen_Wasm), (3) SIMD hot paths. Corrección-primero (frame-hash). Speedup ref = vu1 sobre F2. Implementación necesita fork de Play!.
+- 2026-07-09: F3-prep — fixture vu1 (ps2sdk AFL, VU1+texturas, sin VCL) añadido y compilando en CI. Da margen medible que el cubo (cap 60fps) no tiene.
 
 ## Decisions Log
 - 2026-07-08: D1..D12 bloqueadas (docs/PS2WEB-MASTER-PLAN.md §1).
