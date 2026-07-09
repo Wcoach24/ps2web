@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase
-F2 (execute) — threads pool 2→8, memoria fija 1GB (D5), -msimd128 global (D4) vía tools/apply_f2_flags.sh + configure. Pusheado; validando en CI. Threads ya venían activos upstream (-pthread + pool 2).
+F2 (execute) — fix pusheado (bd9665d, run 29056441944). El fallo previo NO eran los flags (pool8+1GB+-msimd128 compilan y verifican Play.wasm) sino ESLint del build CRA: ps2web_metrics.ts usaba `self` (prohibido por no-restricted-globals) → cambiado a `window.crossOriginIsolated`. Esperando run: assemble + smoke + harness (threadsOk, simdHashMatchesBaseline). Check autónomo programado 00:39Z cubre el newest run.
 
 ## Completed
 - 2026-07-09: `.gsd/` scaffolding desde §5 + master plan en docs/.
