@@ -1,0 +1,12 @@
+{
+  "name": "ps2web",
+  "private": true,
+  "version": "0.0.0",
+  "description": "PS2WEB overlay: reproducible wasm build + harness over jpd002/Play-",
+  "scripts": {
+    "smoke": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0"
+  }
+}

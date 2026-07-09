@@ -1,0 +1,105 @@
+name: Build PS2WEB (wasm)
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout ps2web (overlay)
+        uses: actions/checkout@v4
+        with:
+          path: ps2web
+
+      - name: Read pinned upstream SHA
+        id: pin
+        run: echo "sha=$(cat ps2web/UPSTREAM.lock)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Play- at pinned SHA
+        uses: actions/checkout@v4
+        with:
+          repository: jpd002/Play-
+          ref: ${{ steps.pin.outputs.sha }}
+          submodules: recursive
+          fetch-depth: 0
+          path: Play-
+
+      - name: Fixture license check (LEG-02)
+        run: bash ps2web/tools/check_fixture_licenses.sh
+
+      - name: Setup Emscripten (pinned)
+        uses: emscripten-core/setup-emsdk@v16
+        with:
+          version: 4.0.1
+
+      - name: Install ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.17
+
+      - name: Configure (emcmake, preset wasm-ninja)
+        working-directory: Play-
+        run: emcmake cmake --preset wasm-ninja
+
+      - name: Build (preset wasm-ninja-release)
+        working-directory: Play-
+        run: cmake --build --preset wasm-ninja-release
+
+      - name: Verify Play.wasm artifact exists
+        working-directory: Play-
+        run: |
+          BUILD_DIR=build_cmake/build/wasm-ninja/Source/ui_js/Release
+          ls -la "$BUILD_DIR"
+          test -f "$BUILD_DIR/Play.wasm"
+
+      - name: Assemble Play Browser site
+        working-directory: Play-
+        run: |
+          BUILD_DIR="$GITHUB_WORKSPACE/Play-/build_cmake/build/wasm-ninja/Source/ui_js/Release"
+          cd js/play_browser
+          cp "$BUILD_DIR/Play.js"   ./src/
+          cp "$BUILD_DIR/Play.wasm" ./public/
+          cp "$BUILD_DIR/Play.js"   ./public/
+          export REACT_APP_VERSION="$(git -C "$GITHUB_WORKSPACE/Play-" describe --tags --always 2>/dev/null || echo dev)"
+          npm install
+          npm run build
+
+      - name: Stage dist for ps2web
+        run: |
+          mkdir -p ps2web/dist
+          cp -r Play-/js/play_browser/build/. ps2web/dist/
+          cp "Play-/build_cmake/build/wasm-ninja/Source/ui_js/Release/Play.wasm" ps2web/dist/Play.wasm
+          ls -la ps2web/dist | head
+
+      - name: Upload Play.wasm
+        uses: actions/upload-artifact@v4
+        with:
+          name: play-wasm
+          path: Play-/build_cmake/build/wasm-ninja/Source/ui_js/Release/Play.wasm
+
+      - name: Upload site
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps2web-site
+          path: ps2web/dist
+
+      - name: Playwright smoke (COOP/COEP + valid wasm)
+        working-directory: ps2web
+        run: |
+          npm install
+          npx playwright install --with-deps chromium
+          npm run smoke
+
+      - name: Upload smoke screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: f0-smoke-screenshot
+          path: ps2web/test-results
+          if-no-files-found: ignore
