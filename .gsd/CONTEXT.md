@@ -61,3 +61,22 @@ Fixture homebrew = sample `cube` del ps2sdk (AFL v2.0), fuente vendorizada en
 ### Baseline = rig CI headless (swiftshader)
 El baseline es una referencia RELATIVA en CI (WebGL software). El objetivo T1 (60 fps desktop)
 se mide a mano. F3 mide speedup contra el baseline CI, no contra T1.
+
+---
+# Context — Phase F2: Threads + SIMD + memoria
+
+## Punto de partida (verificado en Play! @ pinned)
+- Threads YA activos: `find_package(Threads)` → `-pthread` global; `-sPTHREAD_POOL_SIZE=2`.
+- Memoria: `-sALLOW_MEMORY_GROWTH`. Tabla: `-sALLOW_TABLE_GROWTH` (la usa el JIT: addFunction).
+- SIMD: NO hay `-msimd128` en el build (el MD/v128 se genera en runtime, independiente del compilador).
+
+## Locked Decisions
+- **D3**: pool de pthreads 2→8.
+- **D5**: quitar `-sALLOW_MEMORY_GROWTH`, usar `-sINITIAL_MEMORY=1073741824` (1 GB fija, sin growth con threads). Mantener `-sALLOW_TABLE_GROWTH` (crítico para el JIT).
+- **D4**: `-msimd128` global vía `-DCMAKE_CXX_FLAGS/-DCMAKE_C_FLAGS` en el configure (vectoriza el core C++).
+- Mecanismo: cambios de build como `tools/apply_f2_flags.sh` (seds quirúrgicos, versionado, logueado en CI) sobre el árbol pinneado. **Fork real de Play! diferido a F3** (donde se tocan muchos ficheros de deps/CodeGen; ahí el overlay/sed deja de ser cómodo).
+- THR-02: el harness registra `frameHash` vs baseline (`simdHashMatchesBaseline`) y `threadsOk`. Hashing robusto de GS sigue diferido a F3/F4.
+
+## Riesgos F2 (a validar con el run)
+- Memoria fija 1 GB con threads: que el emulador no haga OOM (el cubo cabe de sobra; juegos grandes se validan luego).
+- `-msimd128` + pthreads en emsdk 4.0.1: que compile limpio y no cambie resultados (autovectorizador).

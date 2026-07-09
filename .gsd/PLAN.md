@@ -1,30 +1,21 @@
-# PLAN — Phase F0
+# PLAN — Phase F2
 
 <plan>
   <metadata>
     <wave>1</wave>
-    <depends_on></depends_on>
-    <files_modified>
-      UPSTREAM.lock, .emsdk-version, LEGAL.md, BUILDING.md, README.md,
-      tools/build.sh, tools/serve.py, tools/check_fixture_licenses.sh,
-      tests/smoke.spec.js, playwright.config.js, package.json,
-      .github/workflows/build.yml
-    </files_modified>
-    <requirements>BLD-01, BLD-02, LEG-01, LEG-02</requirements>
+    <files_modified>tools/apply_f2_flags.sh, overlay/js/play_browser/src/ps2web_metrics.ts, .github/workflows/build.yml</files_modified>
+    <requirements>THR-01, BLD-03</requirements>
     <must_haves>
-      - UPSTREAM.lock pins jpd002/Play- commit; .emsdk-version = 4.0.1
-      - tools/build.sh reproducibly builds Play.wasm (local path)
-      - tools/serve.py serves with COOP/COEP
-      - LEGAL.md (LEG-01/02) + BUILDING.md present
-      - .github/workflows/build.yml builds Play.wasm in CI and uploads artifacts
+      - CI aplica pool=8 + memoria fija 1GB sobre Play! (apply_f2_flags.sh asserts)
+      - Build wasm sigue verde con los flags nuevos
+      - Harness reporta threadsOk=true (crossOriginIsolated + SharedArrayBuffer)
     </must_haves>
   </metadata>
-  <task type="auto">
-    <name>Overlay repo + reproducible build scripts + legal/docs</name>
+  <task type="auto"><name>Threads pool 8 + memoria fija 1GB + señal threadsOk</name>
     <verify>
-      - [ ] UPSTREAM.lock and .emsdk-version exist with pinned values
-      - [ ] tools/build.sh, serve.py, check_fixture_licenses.sh executable
-      - [ ] LEGAL.md, BUILDING.md, README.md present
+      - [ ] apply_f2_flags.sh exit 0 (asserts pool8, INITIAL_MEMORY, no growth, table growth intacto)
+      - [ ] job build verde con flags nuevos
+      - [ ] bench json: threadsOk=true
     </verify>
   </task>
 </plan>
@@ -33,20 +24,18 @@
   <metadata>
     <wave>2</wave>
     <depends_on>wave1</depends_on>
-    <files_modified>.github/workflows/build.yml, tests/smoke.spec.js</files_modified>
-    <requirements>BLD-01, BLD-03(partial)</requirements>
+    <files_modified>.github/workflows/build.yml, tests/harness/bench.spec.js</files_modified>
+    <requirements>THR-02</requirements>
     <must_haves>
-      - CI run is green
-      - Artifact play-wasm (Play.wasm) uploaded and non-trivial in size
-      - Smoke test: crossOriginIsolated === true AND Play.wasm validates
+      - -msimd128 global en el configure; build verde
+      - Harness registra frameHash vs baseline (simdHashMatchesBaseline) sin romper
+      - avgFps > 0 (sigue booteando y renderizando con SIMD)
     </must_haves>
   </metadata>
-  <task type="human-verify">
-    <name>Green CI run producing Play.wasm + passing COOP/COEP smoke</name>
+  <task type="human-verify"><name>-msimd128 global sin regresión de corrección</name>
     <verify>
-      - [ ] GitHub Actions "Build PS2WEB (wasm)" conclusion == success
-      - [ ] play-wasm artifact present
-      - [ ] smoke assertions pass (COI true, wasm valid)
+      - [ ] job build verde con -msimd128
+      - [ ] job harness verde; bench/results/cube.json con threadsOk + simdHashMatchesBaseline
     </verify>
   </task>
 </plan>

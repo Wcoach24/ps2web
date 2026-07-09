@@ -8,7 +8,9 @@ const TARGET_FPS = 59.94; // PS2 NTSC vsync (PAL=50). emuSpeedPct is vs NTSC; do
 
 export function startMetrics(playModule: any) {
   (window as any).PlayModule = playModule;
-  const metrics = { fps: 0, emuSpeedPct: 0, msPerFrame: 0, frameHash: null as number | null, ts: Date.now() };
+  const threadsOk = (self.crossOriginIsolated === true) && (typeof SharedArrayBuffer !== 'undefined');
+  const cores = (navigator as any).hardwareConcurrency || 0;
+  const metrics = { fps: 0, emuSpeedPct: 0, msPerFrame: 0, frameHash: null as number | null, threadsOk, cores, ts: Date.now() };
   (window as any).__ps2web_metrics = metrics;
 
   let last = performance.now();

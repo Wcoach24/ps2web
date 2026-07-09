@@ -1,7 +1,7 @@
-// F1 harness (OBS-02): boot a homebrew ELF, sample window.__ps2web_metrics,
-// emit bench/results/<fixture>.json. Baseline is measured on this same CI/
-// headless (swiftshader) rig — it is a RELATIVE reference for F3 speedup, not
-// the "desktop medio 60fps" T1 target (that is measured manually by the human).
+// F1/F2 harness (OBS-02): boot a homebrew ELF, sample window.__ps2web_metrics,
+// emit bench/results/<fixture>.json. Baseline (bench/results/baseline.json) is
+// IMMUTABLE (F1); this run compares against it. Rig = CI headless swiftshader:
+// a RELATIVE reference for F3 speedup, not the "desktop 60fps" T1 target.
 const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
@@ -11,23 +11,18 @@ const SECONDS = parseInt(process.env.BENCH_SECONDS || '30', 10);
 const WARMUP = parseInt(process.env.BENCH_WARMUP || '5', 10);
 
 test(`bench ${FIXTURE}`, async ({ page }) => {
-  const logs = [];
-  page.on('console', m => logs.push(m.text()));
   await page.goto('/', { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.__ps2web && window.__ps2web.ready, null, { timeout: 60000 });
 
-  // Wait for the emulator module + PS2WEB hooks to be ready.
-  await page.waitForFunction(() => (window).__ps2web && (window).__ps2web.ready, null, { timeout: 60000 });
-
-  const booted = await page.evaluate((f) => (window).__ps2web.bootElfFromUrl(`/fixtures/${f}.elf`), FIXTURE);
+  const booted = await page.evaluate((f) => window.__ps2web.bootElfFromUrl(`/fixtures/${f}.elf`), FIXTURE);
   expect(booted.size, 'fixture ELF non-empty').toBeGreaterThan(0);
 
-  await page.waitForTimeout(WARMUP * 1000); // warmup (JIT compile of hot blocks)
+  await page.waitForTimeout(WARMUP * 1000);
 
   const samples = [];
   for (let i = 0; i < SECONDS; i++) {
     await page.waitForTimeout(1000);
-    const m = await page.evaluate(() => (window).__ps2web_metrics);
-    samples.push(m);
+    samples.push(await page.evaluate(() => window.__ps2web_metrics));
   }
 
   const fpsArr = samples.map(s => s.fps).filter(x => typeof x === 'number');
@@ -35,29 +30,47 @@ test(`bench ${FIXTURE}`, async ({ page }) => {
   const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0;
   const p95 = a => a.length ? a[Math.min(a.length - 1, Math.floor(a.length * 0.95))] : 0;
 
+  const outDir = path.join(__dirname, '../../bench/results');
+  fs.mkdirSync(outDir, { recursive: true });
+
+  // Compare against the immutable F1 baseline frame hash (THR-02 regression signal).
+  let baselineHash = null;
+  const baselinePath = path.join(outDir, 'baseline.json');
+  if (fs.existsSync(baselinePath)) {
+    try { baselineHash = (JSON.parse(fs.readFileSync(baselinePath, 'utf8')).frameHashes || [])[0] ?? null; } catch (e) {}
+  }
+  const hashes = samples.map(s => s.frameHash);
+  const stableHash = hashes.length ? hashes[hashes.length - 1] : null;
+
   const result = {
     fixture: FIXTURE,
     rig: 'ci-headless-swiftshader',
-    seconds: SECONDS,
-    warmup: WARMUP,
+    seconds: SECONDS, warmup: WARMUP,
     avgFps: Math.round(avg(fpsArr) * 100) / 100,
     minFps: fpsArr.length ? Math.min(...fpsArr) : 0,
     maxFps: fpsArr.length ? Math.max(...fpsArr) : 0,
     avgEmuSpeedPct: Math.round(avg(samples.map(s => s.emuSpeedPct)) * 10) / 10,
     p95MsPerFrame: Math.round(p95(msArr) * 100) / 100,
+    threadsOk: samples.length ? !!samples[samples.length - 1].threadsOk : false,
+    cores: samples.length ? (samples[samples.length - 1].cores || 0) : 0,
+    frameHash: stableHash,
+    baselineFrameHash: baselineHash,
+    simdHashMatchesBaseline: (baselineHash != null && stableHash === baselineHash),
     fixtureBytes: booted.size,
-    frameHashes: samples.map(s => s.frameHash),
+    frameHashes: hashes,
     samples,
     upstream: fs.existsSync(path.join(__dirname, '../../UPSTREAM.lock'))
       ? fs.readFileSync(path.join(__dirname, '../../UPSTREAM.lock'), 'utf8').trim() : null,
     generatedAt: new Date().toISOString(),
   };
 
-  const outDir = path.join(__dirname, '../../bench/results');
-  fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(path.join(outDir, `${FIXTURE}.json`), JSON.stringify(result, null, 2));
-  if (FIXTURE === 'cube') fs.writeFileSync(path.join(outDir, 'baseline.json'), JSON.stringify(result, null, 2));
+  // Seed the immutable baseline ONLY if it doesn't exist yet (never overwrite).
+  if (FIXTURE === 'cube' && !fs.existsSync(baselinePath)) {
+    fs.writeFileSync(baselinePath, JSON.stringify(result, null, 2));
+  }
 
-  console.log(`[bench] ${FIXTURE} avgFps=${result.avgFps} emuSpeed=${result.avgEmuSpeedPct}% p95ms=${result.p95MsPerFrame}`);
-  expect(result.avgFps, 'emulator produced frames (fixture booted & rendered)').toBeGreaterThan(0);
+  console.log(`[bench] ${FIXTURE} avgFps=${result.avgFps} emu=${result.avgEmuSpeedPct}% p95ms=${result.p95MsPerFrame} threadsOk=${result.threadsOk} cores=${result.cores} hashMatchesBaseline=${result.simdHashMatchesBaseline}`);
+  expect(result.threadsOk, 'crossOriginIsolated + SharedArrayBuffer (threads) available').toBe(true);
+  expect(result.avgFps, 'emulator produced frames').toBeGreaterThan(0);
 });

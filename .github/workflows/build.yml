@@ -51,6 +51,9 @@ jobs:
         run: bash ps2web/tools/check_fixture_licenses.sh
       - name: Apply PS2WEB frontend overlay
         run: cp -rv ps2web/overlay/js/play_browser/src/. Play-/js/play_browser/src/
+
+      - name: Apply F2 build flags (threads pool 8 + fixed 1GB memory)
+        run: bash ps2web/tools/apply_f2_flags.sh Play-
       - name: Setup Emscripten (pinned)
         uses: emscripten-core/setup-emsdk@v16
         with:
@@ -61,9 +64,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20.17
-      - name: Configure (emcmake, preset wasm-ninja)
+      - name: Configure (emcmake, preset wasm-ninja + -msimd128)
         working-directory: Play-
-        run: emcmake cmake --preset wasm-ninja
+        run: emcmake cmake --preset wasm-ninja -DCMAKE_CXX_FLAGS="-msimd128" -DCMAKE_C_FLAGS="-msimd128"
       - name: Build (preset wasm-ninja-release)
         working-directory: Play-
         run: cmake --build --preset wasm-ninja-release

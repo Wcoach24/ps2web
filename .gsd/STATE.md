@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase
-F1 COMPLETA. Baseline en docs/BASELINE.md + bench/results/baseline.json (cube 56.8fps, 94.8% realtime). Smoke arreglado (testMatch smoke.spec.js — antes corría bench sin fixture). Checkpoint de rama F3 = **Rama A**. Listo para F2 (threads+SIMD) o F5 (OPFS).
+F2 (execute) — threads pool 2→8, memoria fija 1GB (D5), -msimd128 global (D4) vía tools/apply_f2_flags.sh + configure. Pusheado; validando en CI. Threads ya venían activos upstream (-pthread + pool 2).
 
 ## Completed
 - 2026-07-09: `.gsd/` scaffolding desde §5 + master plan en docs/.
@@ -16,6 +16,8 @@ F1 COMPLETA. Baseline en docs/BASELINE.md + bench/results/baseline.json (cube 56
 - 2026-07-09: F1 W3 — harness Playwright (tests/harness) + fixture cube (ps2sdk AFL v2.0) compilado en CI (job fixtures, imagen ps2dev). Workflow con 3 jobs: fixtures, build (+overlay), harness.
 
 - 2026-07-09: F1 W4 — BASELINE (cube: 56.8 avgFps, 94.8% realtime, p95 17.86ms; rig ci-headless-swiftshader). Bug de smoke resuelto: playwright.config.js corría TODOS los specs (incl. harness/bench sin fixture) → testMatch a smoke.spec.js.
+
+- 2026-07-09: F2 — pool pthreads 2→8; memoria fija -sINITIAL_MEMORY=1GB (quita ALLOW_MEMORY_GROWTH, D5); -msimd128 global (D4). ALLOW_TABLE_GROWTH intacto (JIT). Cambios vía tools/apply_f2_flags.sh (sed) en CI; fork real diferido a F3.
 
 ## Decisions Log
 - 2026-07-08: D1..D12 bloqueadas (docs/PS2WEB-MASTER-PLAN.md §1).
