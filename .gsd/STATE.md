@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase
-F2 (execute) — fix pusheado (bd9665d, run 29056441944). El fallo previo NO eran los flags (pool8+1GB+-msimd128 compilan y verifican Play.wasm) sino ESLint del build CRA: ps2web_metrics.ts usaba `self` (prohibido por no-restricted-globals) → cambiado a `window.crossOriginIsolated`. Esperando run: assemble + smoke + harness (threadsOk, simdHashMatchesBaseline). Check autónomo programado 00:39Z cubre el newest run.
+F2 COMPLETA y verificada. Build SIMD (cube.json) vs baseline: avgFps 56.8→57.6, emu% 94.8→96.1, p95 17.86→17.55; threadsOk=true (4 cores); frameHash idéntico → simdHashMatchesBaseline=true (sin regresión, THR-02). Mejora marginal por cap ~60fps (present-bound); F3 necesita fixture CPU/VU-bound. Siguiente: **F3 (JIT, camino crítico)** — requiere fork real de Play!. Paralelizables: F4 (WebGPU), F5 (OPFS).
 
 ## Completed
 - 2026-07-09: `.gsd/` scaffolding desde §5 + master plan en docs/.
@@ -17,6 +17,7 @@ F2 (execute) — fix pusheado (bd9665d, run 29056441944). El fallo previo NO era
 
 - 2026-07-09: F1 W4 — BASELINE (cube: 56.8 avgFps, 94.8% realtime, p95 17.86ms; rig ci-headless-swiftshader). Bug de smoke resuelto: playwright.config.js corría TODOS los specs (incl. harness/bench sin fixture) → testMatch a smoke.spec.js.
 
+- 2026-07-09: F2 COMPLETA — SIMD build cube 57.6fps/96.1%, threadsOk(4c), hash==baseline (sin regresión). Ver bench/results/cube.json.
 - 2026-07-09: F2 — pool pthreads 2→8; memoria fija -sINITIAL_MEMORY=1GB (quita ALLOW_MEMORY_GROWTH, D5); -msimd128 global (D4). ALLOW_TABLE_GROWTH intacto (JIT). Cambios vía tools/apply_f2_flags.sh (sed) en CI; fork real diferido a F3.
 
 ## Decisions Log

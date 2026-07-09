@@ -1,0 +1,223 @@
+{
+  "fixture": "cube",
+  "rig": "ci-headless-swiftshader",
+  "seconds": 20,
+  "warmup": 6,
+  "avgFps": 57.6,
+  "minFps": 56.99,
+  "maxFps": 58.01,
+  "avgEmuSpeedPct": 96.1,
+  "p95MsPerFrame": 17.55,
+  "threadsOk": true,
+  "cores": 4,
+  "frameHash": 3820964002,
+  "baselineFrameHash": 3820964002,
+  "simdHashMatchesBaseline": true,
+  "fixtureBytes": 174772,
+  "frameHashes": [
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002,
+    1877863668,
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002,
+    3820964002
+  ],
+  "samples": [
+    {
+      "fps": 58,
+      "emuSpeedPct": 96.8,
+      "msPerFrame": 17.24,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638846127
+    },
+    {
+      "fps": 58,
+      "emuSpeedPct": 96.8,
+      "msPerFrame": 17.24,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638847125
+    },
+    {
+      "fps": 57,
+      "emuSpeedPct": 95.1,
+      "msPerFrame": 17.54,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638848126
+    },
+    {
+      "fps": 58,
+      "emuSpeedPct": 96.8,
+      "msPerFrame": 17.24,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638849128
+    },
+    {
+      "fps": 57,
+      "emuSpeedPct": 95.1,
+      "msPerFrame": 17.54,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638850126
+    },
+    {
+      "fps": 58,
+      "emuSpeedPct": 96.8,
+      "msPerFrame": 17.24,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638851129
+    },
+    {
+      "fps": 58,
+      "emuSpeedPct": 96.8,
+      "msPerFrame": 17.24,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638852126
+    },
+    {
+      "fps": 58,
+      "emuSpeedPct": 96.8,
+      "msPerFrame": 17.24,
+      "frameHash": 1877863668,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638853130
+    },
+    {
+      "fps": 58,
+      "emuSpeedPct": 96.8,
+      "msPerFrame": 17.24,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638854125
+    },
+    {
+      "fps": 56.99,
+      "emuSpeedPct": 95.1,
+      "msPerFrame": 17.55,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638855128
+    },
+    {
+      "fps": 58.01,
+      "emuSpeedPct": 96.8,
+      "msPerFrame": 17.24,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638856128
+    },
+    {
+      "fps": 57,
+      "emuSpeedPct": 95.1,
+      "msPerFrame": 17.54,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638857125
+    },
+    {
+      "fps": 58,
+      "emuSpeedPct": 96.8,
+      "msPerFrame": 17.24,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638858130
+    },
+    {
+      "fps": 57,
+      "emuSpeedPct": 95.1,
+      "msPerFrame": 17.54,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638859125
+    },
+    {
+      "fps": 57,
+      "emuSpeedPct": 95.1,
+      "msPerFrame": 17.54,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638860126
+    },
+    {
+      "fps": 58,
+      "emuSpeedPct": 96.8,
+      "msPerFrame": 17.24,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638861125
+    },
+    {
+      "fps": 57,
+      "emuSpeedPct": 95.1,
+      "msPerFrame": 17.54,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638862125
+    },
+    {
+      "fps": 58,
+      "emuSpeedPct": 96.8,
+      "msPerFrame": 17.24,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638863127
+    },
+    {
+      "fps": 57,
+      "emuSpeedPct": 95.1,
+      "msPerFrame": 17.54,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638864125
+    },
+    {
+      "fps": 57.99,
+      "emuSpeedPct": 96.7,
+      "msPerFrame": 17.24,
+      "frameHash": 3820964002,
+      "threadsOk": true,
+      "cores": 4,
+      "ts": 1783638865130
+    }
+  ],
+  "upstream": "b72057621e55608e0b10f14ee9e54d56fd6cc99c",
+  "generatedAt": "2026-07-09T23:14:25.282Z"
+}
