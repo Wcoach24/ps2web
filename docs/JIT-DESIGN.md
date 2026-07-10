@@ -78,7 +78,8 @@ donde falte. Verificación: frame-hash idéntico (sin regresión) + speedup en `
 ## 4. Medición del speedup
 Fixture de referencia = **vu1** (CPU/VU-bound; el cubo topa a ~60fps y no deja margen). La
 referencia pre-F3 es `bench/results/vu1.json` sobre el build **F2** (threads+SIMD+mem fija).
-`tools/assert_speedup.js vu1-f2.json vu1-f3.json --min 2.0` debe salir 0. La corrección se
+`tools/assert_speedup.js vu1-f2.json vu1-f3.json --min 2.0` debe salir 0.
+`tools/assert_speedup.js` (implementado, auto-testeado): acepta VARIOS runs por lado y usa la MEDIANA (bate el ruido ±10% del runner) + gate de frameHash (falla si cambia la corrección). La corrección se
 valida con `simdHashMatchesBaseline`/frame-hash en TODOS los fixtures.
 
 ## 5. Fork de Play! (gate de la implementación)

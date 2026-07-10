@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase
-F3: medición + diseño de implementación de la Palanca 2 COMPLETOS (JIT-DESIGN.md §Plan de implementación). ABI de bloque verificado (void(context) vía tabla). Sub-hitos definidos: W2.2a mapa PC→tableIndex en memoria lineal → W2.2b función residente dispatchLoop en wasm (call_indirect, respeta excepción/quota, tras flag A/B) → W2.2c sucesor directo. Gate: frame-hash idéntico por sub-hito; speedup = mediana ≥3 runs vu1 (ruido ±10%). SIGUIENTE: implementar W2.2a. Es el núcleo research-grade, varias iteraciones.
+F3: herramienta de DoD lista. tools/assert_speedup.js (la que exige el plan §6-F3) construida y auto-testeada: compara mediana de N runs baseline-vs-candidate, con gate de frame-hash (corrección > velocidad, regla #2). Protocolo de medición: vu1 F2-ref (mediana ≥3 runs) vs vu1 F3. SIGUIENTE en el camino crítico F3: W2.2a (mapa PC→tableIndex) → W2.2b (dispatchLoop residente en wasm). Research-grade, sub-hito a sub-hito con frame-hash. Medición ya no bloquea (tool listo).
 
 ## Completed
 - 2026-07-09: `.gsd/` scaffolding desde §5 + master plan en docs/.
