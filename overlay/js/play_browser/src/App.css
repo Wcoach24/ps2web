@@ -1,0 +1,77 @@
+/* PS2WEB(Sprint 1) — product-grade library shell. Dark, compact, keyboard-friendly. */
+:root {
+  --ps2-bg: #0e1116;
+  --ps2-panel: #161b22;
+  --ps2-panel-2: #1c232d;
+  --ps2-border: #2b333d;
+  --ps2-text: #e6edf3;
+  --ps2-muted: #8b949e;
+  --ps2-accent: #3b82f6;
+  --ps2-ok: #2ea043;
+  --ps2-ok-bg: #10331d;
+  --ps2-tracker: #1f6feb;
+  --ps2-tracker-bg: #0d2847;
+}
+
+body { background: var(--ps2-bg); color: var(--ps2-text); }
+
+#outputCanvas {
+  aspect-ratio: 4 / 3;
+  width: 100%;
+  max-width: 640px;
+  background: #000;
+  border: 1px solid var(--ps2-border);
+  border-radius: 6px;
+  display: block;
+}
+
+.ps2-app { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: var(--ps2-text); }
+
+.ps2-header { display: flex; align-items: center; gap: 12px; padding: 6px 2px 14px; border-bottom: 1px solid var(--ps2-border); margin-bottom: 16px; }
+.ps2-brand { font-weight: 700; font-size: 18px; letter-spacing: 0.5px; }
+.ps2-fps { color: var(--ps2-muted); font-variant-numeric: tabular-nums; }
+.ps2-version { margin-left: auto; color: var(--ps2-muted); font-size: 12px; }
+
+.ps2-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+.ps2-status { color: var(--ps2-muted); font-size: 13px; }
+
+.ps2-h2 { font-size: 15px; font-weight: 600; margin: 20px 0 10px; color: var(--ps2-text); }
+.ps2-h2 small { color: var(--ps2-muted); font-weight: 400; font-size: 12px; }
+.ps2-count { display: inline-block; min-width: 20px; padding: 1px 8px; margin-left: 4px; border-radius: 999px; background: var(--ps2-panel-2); color: var(--ps2-muted); font-size: 12px; }
+
+.ps2-empty { color: var(--ps2-muted); background: var(--ps2-panel); border: 1px dashed var(--ps2-border); border-radius: 8px; padding: 16px; font-size: 13px; }
+
+.ps2-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.ps2-card { background: var(--ps2-panel); border: 1px solid var(--ps2-border); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.ps2-card-title { font-weight: 600; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ps2-card-meta { color: var(--ps2-muted); font-size: 12px; }
+.ps2-card-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+.ps2-btn { cursor: pointer; border: 1px solid var(--ps2-border); background: var(--ps2-panel-2); color: var(--ps2-text); border-radius: 6px; padding: 6px 10px; font-size: 13px; transition: background 0.12s ease, border-color 0.12s ease; }
+.ps2-btn:hover { background: #232c38; }
+.ps2-btn:disabled { opacity: 0.5; cursor: default; }
+.ps2-btn-play { border-color: #295a34; }
+.ps2-btn-play:hover { background: var(--ps2-ok-bg); border-color: var(--ps2-ok); }
+.ps2-btn-del:hover { background: #3a1418; border-color: #a5303a; }
+.ps2-btn-import { background: var(--ps2-accent); border-color: var(--ps2-accent); color: #fff; font-weight: 600; }
+.ps2-btn-import:hover { background: #2f6fd6; }
+
+.ps2-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; width: fit-content; border: 1px solid transparent; }
+.ps2-badge-ok { color: #7ee787; background: var(--ps2-ok-bg); border-color: #1f5c30; }
+.ps2-badge-tracker { color: #79c0ff; background: var(--ps2-tracker-bg); border-color: #1f4b7a; }
+.ps2-badge-muted { color: var(--ps2-muted); background: var(--ps2-panel-2); border-color: var(--ps2-border); }
+
+.ps2-search { width: 100%; box-sizing: border-box; padding: 10px 12px; background: var(--ps2-panel); border: 1px solid var(--ps2-border); border-radius: 8px; color: var(--ps2-text); font-size: 14px; }
+.ps2-search:focus { outline: none; border-color: var(--ps2-accent); }
+
+.ps2-results { margin-top: 10px; border: 1px solid var(--ps2-border); border-radius: 8px; overflow: hidden; max-height: 340px; overflow-y: auto; }
+.ps2-result { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--ps2-border); font-size: 13px; }
+.ps2-result:last-child { border-bottom: none; }
+.ps2-result-title { font-weight: 600; }
+.ps2-result-serial { color: var(--ps2-muted); font-size: 12px; }
+.ps2-result-link { margin-left: auto; color: var(--ps2-accent); text-decoration: none; font-size: 12px; }
+.ps2-noresult { padding: 12px; color: var(--ps2-muted); font-size: 13px; }
+
+/* Keep upstream global layout working (canvas left column, app right). */
+.global-row { display: flex; gap: 20px; flex-wrap: wrap; }
+.global-column { flex: 1 1 380px; min-width: 320px; }

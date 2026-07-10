@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0e1116" />
+    <meta name="description" content="ps2web — emulador PlayStation 2 en el navegador con biblioteca persistente" />
+    <link rel="apple-touch-icon" href="%PUBLIC_URL%/logo192.png" />
+    <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+    <title>ps2web — PS2 en el navegador</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #0e1116; }
+      .ps2-shell { max-width: 1080px; margin: 0 auto; padding: 20px 20px 60px; }
+      .ps2-stage { text-align: center; margin-bottom: 8px; }
+      #outputCanvas { margin: 0 auto; }
+    </style>
+  </head>
+  <body>
+    <noscript>Necesitas activar JavaScript para usar ps2web.</noscript>
+    <div class="ps2-shell">
+      <div class="ps2-stage">
+        <canvas id="outputCanvas" width="640" height="480" tabindex="-1"></canvas>
+      </div>
+      <div id="root"></div>
+    </div>
+  </body>
+</html>

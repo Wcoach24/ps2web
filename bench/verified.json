@@ -1,0 +1,12 @@
+{
+  "schema": "ps2web/verified@1",
+  "description": "Juegos confirmados funcionando EN NAVEGADOR por ps2web (no solo en el tracker de Play! de escritorio). Protocolo de verificación: docs/COMPAT-BROWSER.md. Se muestra como badge '✔ verificado en navegador' en la biblioteca.",
+  "fields": {
+    "serial": "serial PS2 canónico, p. ej. SLUS-21274",
+    "title": "título legible",
+    "verifiedOn": "fecha ISO YYYY-MM-DD",
+    "minutes": "minutos jugados sin cuelgue",
+    "notes": "notas (build, región del dump, glitches)"
+  },
+  "games": []
+}

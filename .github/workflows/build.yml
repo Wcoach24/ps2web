@@ -49,8 +49,17 @@ jobs:
           path: Play-
       - name: Fixture license check (LEG-02)
         run: bash ps2web/tools/check_fixture_licenses.sh
-      - name: Apply PS2WEB frontend overlay
+      - name: Apply PS2WEB frontend overlay (src)
         run: cp -rv ps2web/overlay/js/play_browser/src/. Play-/js/play_browser/src/
+      - name: Apply PS2WEB frontend overlay (public shell)
+        run: |
+          if [ -d ps2web/overlay/js/play_browser/public ]; then
+            cp -rv ps2web/overlay/js/play_browser/public/. Play-/js/play_browser/public/
+          fi
+      - name: Serve compatibility catalog as static assets (Sprint 1)
+        run: |
+          cp -v ps2web/bench/compat.json   Play-/js/play_browser/public/compat.json
+          cp -v ps2web/bench/verified.json Play-/js/play_browser/public/verified.json
 
       - name: Apply F2 build flags (threads pool 8 + fixed 1GB memory)
         run: bash ps2web/tools/apply_f2_flags.sh Play-
