@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase
-F3: fase de MEDICIÓN completa. dispatchesPerSec (run 29078672713): cube 156.9K, vu1 1.85M/seg (~35K disp/frame). Ese es el target que elimina la Palanca 2 (chaining). Ruido de runner ±10% (vu1 80.9↔88.7%) → 2x detectable, batching <5% no. SIGUIENTE: implementar Palanca 2 (chaining) en CCodeGen_Wasm vía patches/codegen/ — núcleo grande, correctness-crítico, varias iteraciones con frame-hash. Empieza por deep-read del emisor de epílogos de bloque.
+F3: medición + diseño de implementación de la Palanca 2 COMPLETOS (JIT-DESIGN.md §Plan de implementación). ABI de bloque verificado (void(context) vía tabla). Sub-hitos definidos: W2.2a mapa PC→tableIndex en memoria lineal → W2.2b función residente dispatchLoop en wasm (call_indirect, respeta excepción/quota, tras flag A/B) → W2.2c sucesor directo. Gate: frame-hash idéntico por sub-hito; speedup = mediana ≥3 runs vu1 (ruido ±10%). SIGUIENTE: implementar W2.2a. Es el núcleo research-grade, varias iteraciones.
 
 ## Completed
 - 2026-07-09: `.gsd/` scaffolding desde §5 + master plan en docs/.

@@ -110,3 +110,46 @@ estacionario** (~0.13 ms/bloque, ~130-150 ms/run, casi todo en warmup) y que **v
 - La Palanca 1 (batching) se mantiene pero con expectativa honesta: win de arranque y de juegos
   reales (decenas de miles de bloques), no de estos micro-fixtures. Menor prioridad de fps.
 - Orden efectivo: **W2.2 = Palanca 2 sobre vu1** → W2.3 batching → W2.4 SIMD hot paths.
+
+---
+## Plan de implementación de la Palanca 2 (chaining) — concreto
+
+**ABI actual (verificado):** cada bloque compila a una función wasm `void(i32 context)`
+(`GenerateCode` en `Jitter_CodeGen_Wasm.cpp`: un `block`+`loop`+statements+`END`s; registrada
+en la `WebAssembly.Table` vía `addFunction`). El bucle C++ (`GenericMipsExecutor::Execute`) lee
+`nPC` (offset `offsetof(CMIPS,m_State.nPC)` en memoria compartida), hace `FindBlockAt` (lookup
+C++) y `block->Execute()` (cruce C++→wasm). Mide ~1.85M/s en vu1.
+
+**Sub-hitos (cada uno con harness + frame-hash == baseline; NUNCA mergear si el hash cambia):**
+
+- **W2.2a — mapa PC→tableIndex en memoria lineal.** C++ mantiene, además del `BlockLookupTwoWay`,
+  una tabla directa/hash en memoria wasm (poblada en `AddBlock`/invalidada en `DeleteBlock`) que
+  mapea `nPC` → índice de la función en la `WebAssembly.Table`. Solo estructura de datos +
+  mantenimiento; sin cambio de ejecución todavía. Verificación: el mapa coincide con `FindBlockAt`
+  para todo PbC visitado (asserts en debug).
+
+- **W2.2b — función residente de dispatch en wasm.** Emitir (una vez, no por bloque) una función
+  wasm `dispatchLoop(context)` que: `loop { if (mem[nPC_off] flags exception) break;
+  idx = lookup(mem, nPC); call_indirect table idx (context); }`. El `lookup` lee el mapa de
+  W2.2a. Sustituye el `while` de C++: `Execute()` pasa a llamar `dispatchLoop` una vez. Respeta
+  EXACTAMENTE el modelo de excepción/quota (`nHasException`, `cycleQuota`) — mismas condiciones de
+  salida que el bucle C++. Detrás de un flag `PS2WEB_WASM_DISPATCH` para comparar A/B.
+  Requiere: `SupportsExternalJumps` deja de ser relevante aquí (el chaining lo hace el loop, no el
+  bloque); `call_indirect` necesita el type-index de la firma `void(i32)`.
+
+- **W2.2c — sucesor directo (opcional, 2b del diseño).** Para branches con destino estático,
+  emitir al final del bloque el `call_indirect` al sucesor sin volver al loop (menos lookups).
+  Solo si 2.2b ya da ganancia y sin regresión.
+
+**Gate de corrección:** frame-hash idéntico en cube+vu1 en CADA sub-hito. **Gate de medición:**
+por el ruido del runner (±10%), medir speedup como **mediana de ≥3 runs** de vu1 F3 vs F2;
+`tools/assert_speedup.js` con ese protocolo, objetivo ≥2x (JIT-02).
+
+**Riesgos específicos:** (1) el `lookup` en wasm debe ser tan barato como para que el ahorro del
+boundary no se lo coma un hash lento → empezar con mapa directo por páginas de PC; (2) invalidación
+de bloques (SMC/recompilación) debe actualizar el mapa atómicamente; (3) reentrancy de excepciones
+(el bloque puede setear `nHasException` a mitad) → el loop revisa el flag tras cada `call_indirect`.
+
+**Alcance honesto:** es trabajo de varias iteraciones (cada build ~30 min) y research-grade de
+JIT. Se hará sub-hito a sub-hito con el harness como red. Fallback del plan si no llega a 2x:
+documentar JIT-02 parcial; nunca sacrificar corrección.
