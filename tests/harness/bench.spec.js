@@ -81,6 +81,18 @@ test(`bench ${FIXTURE}`, async ({ page }) => {
   }
 
   console.log(`[bench] ${FIXTURE} avgFps=${result.avgFps} emu=${result.avgEmuSpeedPct}% p95ms=${result.p95MsPerFrame} threadsOk=${result.threadsOk} cores=${result.cores} jitMs=${result.jitCompileMs} jitBlocks=${result.jitBlocks} dispatch/s=${result.dispatchesPerSec} chainMap=${result.chainMapEntries} stateHash=${result.stateHash} stateHashAtN=${result.stateHashAtN} hashMatchesBaseline=${result.simdHashMatchesBaseline}`);
+  // F3 correctness gate: cube's EE-state hash at a fixed frame is DETERMINISTIC and must not
+  // change under dispatch-only JIT changes (chaining). vu1 is NOT gated on state (async VU1 =>
+  // nondeterministic); vu1 is the speedup fixture (fps). See docs/BENCH-F3.md.
+  if (FIXTURE === 'cube') {
+    const gp = path.join(outDir, 'cube-golden.json');
+    if (fs.existsSync(gp)) {
+      const golden = JSON.parse(fs.readFileSync(gp, 'utf8')).stateHashAtN;
+      console.log(`[gate] cube stateHashAtN=${result.stateHashAtN} golden=${golden}`);
+      expect(result.stateHashAtN, 'cube EE-state hash must match golden (JIT correctness gate)').toBe(golden);
+    }
+  }
+
   expect(result.threadsOk, 'crossOriginIsolated + SharedArrayBuffer (threads) available').toBe(true);
   expect(result.avgFps, 'emulator produced frames').toBeGreaterThan(0);
 });

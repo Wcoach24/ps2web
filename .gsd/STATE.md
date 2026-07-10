@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase
-F3 W2.2a verde + HALLAZGO: el frameHash de canvas NO es gate válido (blank-dominado + no-determinista; cube constante, vu1 varía 4 hashes/run). Bloquea validar W2.2b. Acción (patch 04, en CI): getStateHash() = hash determinista de EE RAM (estado CPU completo) como gate real. Primero valido su reproducibilidad. SIGUIENTE: si stateHash es estable → es el gate de W2.2b (dispatchLoop). Regla #1: sin gate fiable no se toca el chaining.
+F3: GATE DE CORRECCIÓN RESUELTO. 2 runs del mismo commit (c826599): cube.stateHashAtN IGUAL (3049433245)=determinista; vu1 DIFIERE (async VU1). Política: corrección=cube.stateHashAtN (golden + aserción dura en harness); speedup=vu1 fps mediana. Ahora W2.2b (dispatchLoop residente wasm) tiene red real: si corrompe el cómputo, cube falla automáticamente. SIGUIENTE: implementar W2.2b (chaining vía WebAssembly.Table) — el paso que mueve el fps.
 
 ## Completed
 - 2026-07-09: `.gsd/` scaffolding desde §5 + master plan en docs/.
@@ -24,6 +24,8 @@ F3 W2.2a verde + HALLAZGO: el frameHash de canvas NO es gate válido (blank-domi
 - 2026-07-09: F3-prep — fixture vu1 (ps2sdk AFL, VU1+texturas, sin VCL) añadido y compilando en CI. Da margen medible que el cubo (cap 60fps) no tiene.
 
 - 2026-07-09: F3 W2.1 — instrumentación JIT (patch 01) verde. Datos reordenan F3: Palanca 2 (chaining) primero (el JIT-compile es minoritario en steady-state; el dispatch por bloque domina). Ver docs/BENCH-F3.md.
+
+- 2026-07-10: F3 gate de corrección = cube.stateHashAtN (determinista, golden 3049433245, aserción dura en harness). vu1 no-determinista (VU1 async en worker) → solo gate de speedup (fps). Evidencia: 2 runs de c826599.
 
 ## Decisions Log
 - 2026-07-08: D1..D12 bloqueadas (docs/PS2WEB-MASTER-PLAN.md §1).

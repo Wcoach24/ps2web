@@ -54,3 +54,19 @@ la duración del bench.
 - chainMapEntries: cube 1031 (jitBlocks 1034), vu1 1096 (1099). Diff=3 = recompilaciones (mapa por PC único). Mapa OK.
 - **frameHash NO es un gate válido:** cube=3820964002 constante (canvas en blanco: WebGL sin preserveDrawingBuffer); vu1 varía DENTRO del run (4 hashes distintos en 20 muestras) → capta contenido de forma no-determinista. No sirve para validar el JIT.
 - **Acción:** patch 04 añade getStateHash() = hash determinista de EE RAM (todo el estado de CPU). Cualquier divergencia del JIT lo cambia. Se valida su reproducibilidad antes de usarlo como gate de W2.2b.
+
+## Determinismo del gate (2 runs del mismo commit c826599) — RESUELTO
+- **cube: stateHashAtN IGUAL** en ambos runs (3049433245) → DETERMINISTA.
+- **vu1: stateHashAtN DIFIERE** (3746839380 vs 2500197388) → NO determinista.
+- Causa: vu1 ejercita el **VU1** (microcódigo) que corre asíncrono en un worker (confirma la
+  arquitectura de la auditoría). El timing EE↔VU1 varía entre runs → estado a frame fijo cambia.
+  cube usa math3d sobre EE/VU0-macro (síncrono) → determinista.
+
+### Política de gates de F3 (a partir de aquí)
+- **Corrección = cube.stateHashAtN** (golden 3049433245 en bench/results/cube-golden.json;
+  el harness lo asierta en duro). El chaining cambia el dispatch, no el cómputo → cube ejerce
+  todo el dispatch del EE → si el chaining corrompe, cube cambia. Gate válido y automático.
+- **Speedup = vu1 fps mediana** (assert_speedup, mediana de ≥3 runs; el no-determinismo de vu1
+  no afecta la media de fps).
+- vu1.stateHashAtN NO se usa como gate (async VU1). La corrección de VU1 se valida por cube +
+  test visual/manual de la persona (T2).
