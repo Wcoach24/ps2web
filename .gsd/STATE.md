@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase
-F3: herramienta de DoD lista. tools/assert_speedup.js (la que exige el plan §6-F3) construida y auto-testeada: compara mediana de N runs baseline-vs-candidate, con gate de frame-hash (corrección > velocidad, regla #2). Protocolo de medición: vu1 F2-ref (mediana ≥3 runs) vs vu1 F3. SIGUIENTE en el camino crítico F3: W2.2a (mapa PC→tableIndex) → W2.2b (dispatchLoop residente en wasm). Research-grade, sub-hito a sub-hito con frame-hash. Medición ya no bloquea (tool listo).
+F3 W2.2a en vuelo (patch 03): mapa PC→tableIndex poblado en BasicBlock::Compile. Validado que GetCode()=índice de WebAssembly.Table (MemoryFunction.cpp: addFunction). SIN cambio de ejecución → frame-hash debe seguir idéntico; validación = chainMapEntries ≈ jitBlocks (~1000 en vu1). Es la base del dispatchLoop (W2.2b). Pusheado, validando en CI.
 
 ## Completed
 - 2026-07-09: `.gsd/` scaffolding desde §5 + master plan en docs/.

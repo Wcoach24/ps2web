@@ -1,0 +1,59 @@
+diff --git a/Source/BasicBlock.cpp b/Source/BasicBlock.cpp
+index 0faa603..30700c1 100644
+--- a/Source/BasicBlock.cpp
++++ b/Source/BasicBlock.cpp
+@@ -10,6 +10,11 @@
+ std::atomic<uint64_t> g_ps2webJitNs{0};
+ std::atomic<uint32_t> g_ps2webJitBlocks{0};
+ std::atomic<uint64_t> g_ps2webDispatches{0};
++// PS2WEB(F3 W2.2a): PC->wasm table-index map (foundation for chaining; NOT used for execution yet).
++#include <unordered_map>
++#include <mutex>
++std::unordered_map<uint32, uint32> g_ps2webChainMap;
++std::mutex g_ps2webChainMapMtx;
+ 
+ #if defined(AOT_BUILD_CACHE) || defined(AOT_USE_CACHE)
+ #define AOT_ENABLED
+@@ -109,6 +114,11 @@ void CBasicBlock::Compile()
+ 	m_function = CMemoryFunction(stream.GetBuffer(), stream.GetSize());
+ 	g_ps2webJitNs += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _ps2webT0).count();
+ 	++g_ps2webJitBlocks;
++	{
++		uint32 tableIndex = static_cast<uint32>(reinterpret_cast<uintptr_t>(m_function.GetCode()));
++		std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx);
++		g_ps2webChainMap[m_begin] = tableIndex; // PS2WEB(F3 W2.2a)
++	}
+ 
+ #ifdef VTUNE_ENABLED
+ 	if(iJIT_IsProfilingActive() == iJIT_SAMPLING_ON)
+diff --git a/Source/ui_js/Main.cpp b/Source/ui_js/Main.cpp
+index 0c1b0f3..7c24f6e 100644
+--- a/Source/ui_js/Main.cpp
++++ b/Source/ui_js/Main.cpp
+@@ -1,5 +1,7 @@
+ #include <cstdio>
+ #include <atomic>
++#include <unordered_map>
++#include <mutex>
+ #include <emscripten/bind.h>
+ #include "Ps2VmJs.h"
+ #include "GSH_OpenGLJs.h"
+@@ -144,9 +146,12 @@ void clearStats()
+ extern std::atomic<uint64_t> g_ps2webJitNs;
+ extern std::atomic<uint32_t> g_ps2webJitBlocks;
+ extern std::atomic<uint64_t> g_ps2webDispatches;
++extern std::unordered_map<uint32, uint32> g_ps2webChainMap;
++extern std::mutex g_ps2webChainMapMtx;
+ double getJitMs() { return g_ps2webJitNs.load() / 1e6; }
+ int getJitBlocks() { return static_cast<int>(g_ps2webJitBlocks.load()); }
+ double getDispatches() { return static_cast<double>(g_ps2webDispatches.load()); }
++int getChainMapEntries() { std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx); return static_cast<int>(g_ps2webChainMap.size()); }
+ 
+ EMSCRIPTEN_BINDINGS(Play)
+ {
+@@ -159,4 +164,5 @@ EMSCRIPTEN_BINDINGS(Play)
+ 	function("getJitMs", &getJitMs);
+ 	function("getJitBlocks", &getJitBlocks);
+ 	function("getDispatches", &getDispatches);
++	function("getChainMapEntries", &getChainMapEntries);
+ }
