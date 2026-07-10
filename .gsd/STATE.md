@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase
-F5 W1 en vuelo (OPFS DiskStore): overlay ps2web_diskstore.ts (save/list/load OPFS /games/) + window.__ps2web.{diskStore, importAndSave, bootElfFromOpfs} + E2E de persistencia (import→reload→sigue→bootea) en el job harness. Producto: arrastra una vez, juega siempre (IO-01). F3 cerrada parcial (fallback B). Pusheado, validando en CI.
+F8 (ship) infra lista: deploy/vercel.json (COOP/COEP en /*) + job `deploy` en CI que publica el dist/ prebuilt a Vercel con `vercel deploy` (gated en secret VERCEL_TOKEN; se salta limpio si no está). BLOQUEO EXTERNO: falta el token de Vercel. Vía inline del MCP descartada (no puedo emitir el wasm de 2.2MB base64). F5 W1 (OPFS) verde. SIGUIENTE: usuario añade VERCEL_TOKEN (repo Settings>Secrets) o me lo pasa; entonces el push a main despliega y verifico crossOriginIsolated en prod.
 
 ## Completed
 - 2026-07-09: `.gsd/` scaffolding desde §5 + master plan en docs/.
