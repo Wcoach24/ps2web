@@ -28,3 +28,4 @@ nombres ya reflejan el historial deseado. Nada aquí se pierde.
 - 02-dispatch-counter.patch — cuenta dispatches de bloque en el bucle Execute (getDispatches); harness reporta dispatchesPerSec = objetivo de la Palanca 2 (chaining).
 - 03-chainmap-w22a.patch — W2.2a: mapa PC→tableIndex en Compile (getChainMapEntries). Foundation del chaining; SIN cambio de ejecución (frame-hash idéntico). Valida getCode()=índice de tabla.
 - 04-state-hash.patch — getStateHash() (hash determinista de EE base RAM). Reemplaza el frameHash de canvas (roto: dominado por lecturas en blanco + no-determinista) como gate de corrección del JIT. Read-only.
+- 05-frame-anchored-hash.patch — getStateHashAtN(): captura el hash de EE RAM EXACTAMENTE en el frame 180 (dentro del callback de frame), + getTotalFrames(). Sonda determinista: 2 runs del mismo commit deben dar el mismo valor si la emulación es determinista bajo threads.
