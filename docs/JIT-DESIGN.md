@@ -180,3 +180,19 @@ podría pasar el gate (falso verde) y romper juegos reales. Mitigación antes de
   FindBlockAt). Gated por cube golden + medición vu1 + validación manual T2.
 - **W2.2b.2c** (si el boundary domina): bucle de dispatch residente en wasm (call_indirect),
   que requiere emitir wasm a mano importando `__indirect_function_table` — la parte más profunda.
+
+---
+## CIERRE HONESTO DE F3 (2026-07-10) — decisión B (fallback del plan §9)
+Estado real, con evidencia:
+- **F2 subió de verdad** (threads pool 8 + `-msimd128` + memoria fija): validado, mergeado.
+- **JIT-02 (≥2x por chaining) NO alcanzado.** Medido que las optimizaciones del lado C++
+  (2a per-executor map, 2b fast-path) NO aportan fps: el cuello es el cruce C++↔wasm por bloque.
+  El ≥2x requiere **W2.2b.2c** = bucle de dispatch **residente en wasm** (emitir wasm a mano
+  importando `__indirect_function_table`), un mini-proyecto de codegen incierto (¿lo soporta
+  `CWasmModuleBuilder`?). Se difiere como misión profunda separada.
+- **Andamiaje listo para retomar 2c**: gate de corrección determinista (cube.stateHashAtN golden),
+  herramienta de speedup (assert_speedup mediana), instrumentación (jitCompileMs, dispatchesPerSec),
+  mapa PC→índice per-executor (patch 07, correcto, invalidación incluida). El patch 08 (fast-path)
+  se revirtió por no aportar.
+- Per plan §9 rule #8: fallback aplicado, documentado, sin degradar el DoD en silencio y sin
+  sacrificar corrección. F3 queda **parcial y honesto**; se avanza a F5 (producto).

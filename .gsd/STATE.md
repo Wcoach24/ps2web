@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase
-F3 W2.2b.2b MEDIDO — CONCLUYENTE: el fast-path C++ NO aporta fps (vu1 53.25→51.7, −2.9%, dentro de ruido; cube +0.2%; dispatch idéntico). Evidencia: el cuello es el cruce C++↔wasm por bloque, no FindBlockAt. Optimización lado-C++ (2a/2b) AGOTADA. El ≥2x requiere W2.2b.2c (bucle de dispatch RESIDENTE en wasm, emitir wasm a mano importando __indirect_function_table) — deep e incierto. DECISIÓN DE ENDGAME F3 pendiente: (A) atacar 2c, (B) fallback del plan §9 (F2 ya subió; documentar JIT-02 parcial; avanzar F4/F5). Nota: conviene revertir/desactivar el fast-path (patch 08) por no aportar.
+F3 CERRADA (parcial, honesto — decisión B/fallback §9). F2 subió de verdad (threads+SIMD+mem fija). JIT-02 (≥2x chaining) NO alcanzado: medido que el lado C++ no aporta (cuello = frontera C++↔wasm); requiere W2.2b.2c (bucle residente en wasm), diferido como misión profunda. Andamiaje listo para retomarlo (gate cube golden, assert_speedup, instrumentación, mapa per-executor patch 07). Fast-path (patch 08) revertido por no aportar. SIGUIENTE: **F5 (OPFS e I/O)** — producto: arrastra una vez, juega siempre.
 
 ## Completed
 - 2026-07-09: `.gsd/` scaffolding desde §5 + master plan en docs/.
