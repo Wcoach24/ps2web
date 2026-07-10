@@ -1,7 +1,7 @@
 # State
 
 ## Current Phase
-F3 W2.2b.1 en vuelo (patch 06): mapa PC→índice en array plano de memoria lineal (hash abierto, indexable por wasm). Sin cambio de ejecución → gate: cube.stateHashAtN==golden(3049433245) Y chainTableMismatches==0 (la tabla plana coincide con el mapa de referencia). Es el prerrequisito del dispatchLoop (W2.2b.2). Pusheado, validando en CI.
+F3 W2.2b.1 verde. Antes de W2.2b.2 (dispatch) aislé 2 requisitos de corrección (JIT-DESIGN §W2.2b.2): (1) tabla POR-EXECUTOR (el mapa global colisiona EE/IOP/VU), (2) invalidación en DeleteBlock/SMC (o entradas stale → despacho a bloque liberado). CAVEAT: cube probablemente no ejercita SMC → el gate podría dar falso verde; W2.2b.2 exige validación manual T2 además del golden. Orden revisado: W2.2b.2a (tabla per-executor + invalidación, sin fast-path) → 2b (fast-path C++) → 2c (dispatch residente wasm). SIGUIENTE: W2.2b.2a.
 
 ## Completed
 - 2026-07-09: `.gsd/` scaffolding desde §5 + master plan en docs/.

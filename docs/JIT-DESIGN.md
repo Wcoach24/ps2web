@@ -154,3 +154,29 @@ de bloques (SMC/recompilación) debe actualizar el mapa atómicamente; (3) reent
 **Alcance honesto:** es trabajo de varias iteraciones (cada build ~30 min) y research-grade de
 JIT. Se hará sub-hito a sub-hito con el harness como red. Fallback del plan si no llega a 2x:
 documentar JIT-02 parcial; nunca sacrificar corrección.
+
+---
+## W2.2b.2 — refinamiento de corrección (hallado en W2.2b.1)
+Antes de despachar por la tabla, dos requisitos NO triviales:
+1. **Tabla por-executor.** El mapa global (patch 06) lo pueblan EE+IOP+VU → PCs colisionan.
+   La tabla de dispatch debe ser miembro de `CGenericMipsExecutor` (poblar en `CreateBlock`,
+   como `m_blockLookup`). El mapa global de patch 06 solo sirvió para validar el mecanismo.
+2. **Invalidación.** `DeleteBlock`/SMC debe borrar la entrada (o queda stale → despacho a
+   bloque liberado). `Reset()` limpia toda la tabla. Requiere accesor público en CBasicBlock
+   para el índice de tabla (hoy m_function es privado).
+
+### Cobertura del gate (caveat importante)
+El golden de **cube probablemente NO ejercita SMC/invalidación** → un fallo de invalidación
+podría pasar el gate (falso verde) y romper juegos reales. Mitigación antes de W2.2b.2:
+- (a) añadir un fixture/modo que fuerce invalidación de bloques, o
+- (b) marcar W2.2b.2 como validación **manual/T2** obligatoria por la persona (juego real) además
+  del gate de cube. La velocidad no se declara hasta pasar ambos.
+
+### Orden revisado de W2.2b
+- **W2.2b.2a**: mover la tabla plana a per-executor + invalidación en DeleteBlock/Reset +
+  accesor de índice en CBasicBlock. SIN fast-path aún (no cambia ejecución) → cube golden intacto
+  + verificar per-executor mismatches==0.
+- **W2.2b.2b**: fast-path en el bucle `Execute` (lookup O(1) en la tabla + call directo, saltando
+  FindBlockAt). Gated por cube golden + medición vu1 + validación manual T2.
+- **W2.2b.2c** (si el boundary domina): bucle de dispatch residente en wasm (call_indirect),
+  que requiere emitir wasm a mano importando `__indirect_function_table` — la parte más profunda.
