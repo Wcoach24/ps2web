@@ -1,0 +1,54 @@
+diff --git a/Source/BasicBlock.cpp b/Source/BasicBlock.cpp
+index d4bb3ca..0faa603 100644
+--- a/Source/BasicBlock.cpp
++++ b/Source/BasicBlock.cpp
+@@ -9,6 +9,7 @@
+ #include <chrono>
+ std::atomic<uint64_t> g_ps2webJitNs{0};
+ std::atomic<uint32_t> g_ps2webJitBlocks{0};
++std::atomic<uint64_t> g_ps2webDispatches{0};
+ 
+ #if defined(AOT_BUILD_CACHE) || defined(AOT_USE_CACHE)
+ #define AOT_ENABLED
+diff --git a/Source/GenericMipsExecutor.h b/Source/GenericMipsExecutor.h
+index 2fb630f..4ebb04c 100644
+--- a/Source/GenericMipsExecutor.h
++++ b/Source/GenericMipsExecutor.h
+@@ -6,6 +6,8 @@
+ 
+ #include "BlockLookupOneWay.h"
+ #include "BlockLookupTwoWay.h"
++#include <atomic>
++extern std::atomic<uint64_t> g_ps2webDispatches; // PS2WEB(F3): block dispatch counter
+ 
+ FRAMEWORK_MAYBE_UNUSED
+ static bool RangesOverlap(uint32 x1, uint32 x2, uint32 y1, uint32 y2)
+@@ -68,6 +70,7 @@ public:
+ 			uint32 address = m_context.m_State.nPC & m_addressMask;
+ 			auto block = m_blockLookup.FindBlockAt(address);
+ 			block->Execute();
++			g_ps2webDispatches.fetch_add(1, std::memory_order_relaxed); // PS2WEB(F3)
+ 		}
+ 		m_context.m_State.nHasException &= ~MIPS_EXCEPTION_STATUS_QUOTADONE;
+ #ifdef DEBUGGER_INCLUDED
+diff --git a/Source/ui_js/Main.cpp b/Source/ui_js/Main.cpp
+index b976ddc..0c1b0f3 100644
+--- a/Source/ui_js/Main.cpp
++++ b/Source/ui_js/Main.cpp
+@@ -143,8 +143,10 @@ void clearStats()
+ // PS2WEB(F3): expose JIT compile cost (globals live in shared wasm memory, written by the EE worker).
+ extern std::atomic<uint64_t> g_ps2webJitNs;
+ extern std::atomic<uint32_t> g_ps2webJitBlocks;
++extern std::atomic<uint64_t> g_ps2webDispatches;
+ double getJitMs() { return g_ps2webJitNs.load() / 1e6; }
+ int getJitBlocks() { return static_cast<int>(g_ps2webJitBlocks.load()); }
++double getDispatches() { return static_cast<double>(g_ps2webDispatches.load()); }
+ 
+ EMSCRIPTEN_BINDINGS(Play)
+ {
+@@ -156,4 +158,5 @@ EMSCRIPTEN_BINDINGS(Play)
+ 	function("clearStats", &clearStats);
+ 	function("getJitMs", &getJitMs);
+ 	function("getJitBlocks", &getJitBlocks);
++	function("getDispatches", &getDispatches);
+ }
