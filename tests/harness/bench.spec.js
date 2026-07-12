@@ -65,6 +65,12 @@ test(`bench ${FIXTURE}`, async ({ page }) => {
     instancesCreated: samples.length ? (samples[samples.length - 1].instancesCreated || 0) : 0,
     moduleBytes: samples.length ? (samples[samples.length - 1].moduleBytes || 0) : 0,
     blocksPerModule: samples.length ? (samples[samples.length - 1].blocksPerModule || 0) : 0,
+    modulesLive: samples.length ? (samples[samples.length - 1].modulesLive || 0) : 0,
+    modulesReleased: samples.length ? (samples[samples.length - 1].modulesReleased || 0) : 0,
+    batchesEmitted: samples.length ? (samples[samples.length - 1].batchesEmitted || 0) : 0,
+    batchedBlocks: samples.length ? (samples[samples.length - 1].batchedBlocks || 0) : 0,
+    batchSkipped: samples.length ? (samples[samples.length - 1].batchSkipped || 0) : 0,
+    blocksPerLiveModule: samples.length ? (samples[samples.length - 1].blocksPerLiveModule || 0) : 0,
     stateHash: samples.length ? (samples[samples.length - 1].stateHash || 0) : 0,
     stateHashAtN: samples.length ? (samples[samples.length - 1].stateHashAtN || 0) : 0,
     totalFrames: samples.length ? (samples[samples.length - 1].totalFrames || 0) : 0,
@@ -91,6 +97,14 @@ test(`bench ${FIXTURE}`, async ({ page }) => {
   console.log(`[bench] ${FIXTURE} avgFps=${result.avgFps} emu=${result.avgEmuSpeedPct}% p95ms=${result.p95MsPerFrame} threadsOk=${result.threadsOk} cores=${result.cores} jitMs=${result.jitCompileMs} jitBlocks=${result.jitBlocks} dispatch/s=${result.dispatchesPerSec} chainMap=${result.chainMapEntries} tblMismatch=${result.chainTableMismatches} execMismatch=${result.execMismatches} stateHash=${result.stateHash} stateHashAtN=${result.stateHashAtN} hashMatchesBaseline=${result.simdHashMatchesBaseline}`);
   // JIT-04 baseline (Sprint 2 checkpoint): how many wasm modules does one fixture create?
   console.log(`[jit-04] ${FIXTURE} modulesCreated=${result.modulesCreated} instancesCreated=${result.instancesCreated} moduleBytes=${result.moduleBytes} jitBlocks=${result.jitBlocks} blocksPerModule=${result.blocksPerModule}`);
+  // THE number: code-space is paid for LIVE modules. Batching must push blocksPerLiveModule >> 1.
+  console.log(`[jit-04] ${FIXTURE} modulesLive=${result.modulesLive} released=${result.modulesReleased} batches=${result.batchesEmitted} batchedBlocks=${result.batchedBlocks} skipped=${result.batchSkipped} blocksPerLiveModule=${result.blocksPerLiveModule}`);
+  // Batching gate: with 32-block batches the live-module count must collapse. Non-fatal if the
+  // fixture is too small to fill a batch, but cube/vu1 produce ~1000 blocks so it must trigger.
+  if (result.jitBlocks > 200) {
+    expect(result.batchesEmitted, 'batcher must emit batch modules').toBeGreaterThan(0);
+    expect(result.blocksPerLiveModule, 'blocks per LIVE module (code-space win)').toBeGreaterThan(5);
+  }
   // F3 correctness gate: cube's EE-state hash at a fixed frame is DETERMINISTIC and must not
   // change under dispatch-only JIT changes (chaining). vu1 is NOT gated on state (async VU1 =>
   // nondeterministic); vu1 is the speedup fixture (fps). See docs/BENCH-F3.md.

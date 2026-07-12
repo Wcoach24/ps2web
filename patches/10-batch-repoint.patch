@@ -1,0 +1,275 @@
+diff --git a/Source/BasicBlock.cpp b/Source/BasicBlock.cpp
+index 177462fe..6b2480f9 100644
+--- a/Source/BasicBlock.cpp
++++ b/Source/BasicBlock.cpp
+@@ -11,6 +11,7 @@ std::atomic<uint64_t> g_ps2webJitNs{0};
+ std::atomic<uint32_t> g_ps2webJitBlocks{0};
+ std::atomic<uint64_t> g_ps2webDispatches{0};
+ std::atomic<uint32_t> g_ps2webExecMismatches{0}; // PS2WEB(F3 W2.2b.2a)
++std::atomic<uint32_t> g_ps2webBatchSkipped{0};   // PS2WEB(JIT-04): blocks dropped from a batch (invalidated/SMC)
+ // PS2WEB(F3 W2.2a): PC->wasm table-index map (foundation for chaining; NOT used for execution yet).
+ #include <unordered_map>
+ #include <mutex>
+@@ -130,6 +131,11 @@ void CBasicBlock::Compile()
+ 
+ 	auto _ps2webT0 = std::chrono::steady_clock::now();
+ 	m_function = CMemoryFunction(stream.GetBuffer(), stream.GetSize());
++#if defined(__EMSCRIPTEN__)
++	// PS2WEB(JIT-04): keep the module bytes so the batcher can lift this block's function body
++	// into a shared module. ~640 B per pending block; freed as soon as the block is batched.
++	m_ps2webModuleBytes.assign(stream.GetBuffer(), stream.GetBuffer() + stream.GetSize());
++#endif
+ 	g_ps2webJitNs += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _ps2webT0).count();
+ 	++g_ps2webJitBlocks;
+ 	{
+@@ -397,6 +403,30 @@ uint32 CBasicBlock::GetWasmTableIndex() const
+ #endif
+ }
+ 
++#if defined(__EMSCRIPTEN__) && !defined(AOT_USE_CACHE)
++const std::vector<uint8>& CBasicBlock::Ps2webGetModuleBytes() const
++{
++	return m_ps2webModuleBytes;
++}
++
++void CBasicBlock::Ps2webClearModuleBytes()
++{
++	m_ps2webModuleBytes.clear();
++	m_ps2webModuleBytes.shrink_to_fit();
++}
++
++// PS2WEB(JIT-04): point this block at a function inside a batch module. Assigning m_function
++// destroys the old CMemoryFunction, which removes its indirect-table entry and drops its
++// reference to the solo module — freeing that module's code-space once nothing else holds it.
++// Safe to swap the entry point because the wasm build has NO block linking (LinkBlock/UnlinkBlock
++// are compiled out under __EMSCRIPTEN__): a block's identity is just its table index.
++void CBasicBlock::Ps2webRepoint(CMemoryFunction&& function)
++{
++	m_function = std::move(function);
++	Ps2webClearModuleBytes();
++}
++#endif
++
+ uint32 CBasicBlock::GetEndAddress() const
+ {
+ 	return m_end;
+diff --git a/Source/BasicBlock.h b/Source/BasicBlock.h
+index 08eed3d6..0cc89b84 100644
+--- a/Source/BasicBlock.h
++++ b/Source/BasicBlock.h
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include <vector>
++
+ #include "MIPS.h"
+ #include "MemoryFunction.h"
+ #ifdef AOT_BUILD_CACHE
+@@ -81,6 +83,14 @@ public:
+ 	uint32 GetBeginAddress() const;
+ 	uint32 GetEndAddress() const;
+ 	uint32 GetWasmTableIndex() const; // PS2WEB(F3)
++#if defined(__EMSCRIPTEN__) && !defined(AOT_USE_CACHE)
++	// PS2WEB(JIT-04): bytes of this block's own single-function module, kept so the batcher can
++	// lift its function body into a shared module later. Cleared once the block is batched.
++	const std::vector<uint8>& Ps2webGetModuleBytes() const;
++	void Ps2webClearModuleBytes();
++	// Swap this block's function for one backed by a batch module (new indirect-table index).
++	void Ps2webRepoint(CMemoryFunction&&);
++#endif
+ 	bool IsCompiled() const;
+ 	bool IsEmpty() const;
+ 
+@@ -127,6 +137,9 @@ private:
+ 
+ #ifndef AOT_USE_CACHE
+ 	CMemoryFunction m_function;
++#if defined(__EMSCRIPTEN__)
++	std::vector<uint8> m_ps2webModuleBytes; // PS2WEB(JIT-04)
++#endif
+ #else
+ 	void (*m_function)(void*);
+ #endif
+diff --git a/Source/GenericMipsExecutor.h b/Source/GenericMipsExecutor.h
+index b0bd75ab..547aefb0 100644
+--- a/Source/GenericMipsExecutor.h
++++ b/Source/GenericMipsExecutor.h
+@@ -9,7 +9,19 @@
+ #include <atomic>
+ #ifdef __EMSCRIPTEN__
+ #include <vector>
++#include <memory>
++#include "WasmModuleBuilder.h"
++#include "Jitter_CodeGen_Wasm.h"
++#include "MemStream.h"
+ extern std::atomic<uint32_t> g_ps2webExecMismatches; // PS2WEB(F3 W2.2b.2a)
++extern std::atomic<uint32_t> g_ps2webBatchSkipped;   // PS2WEB(JIT-04)
++// PS2WEB(JIT-04): the batcher re-points blocks, so it must keep BOTH reference maps in sync
++// (defined in BasicBlock.cpp). If it didn't, the harness audits would go non-zero.
++#include <unordered_map>
++#include <mutex>
++extern std::unordered_map<uint32, uint32> g_ps2webChainMap;
++extern std::mutex g_ps2webChainMapMtx;
++void ps2webChainInsert(uint32, uint32);
+ #endif
+ extern std::atomic<uint64_t> g_ps2webDispatches; // PS2WEB(F3): block dispatch counter
+ 
+@@ -98,6 +110,7 @@ public:
+ 		m_blockLookup.Clear();
+ #ifdef __EMSCRIPTEN__
+ 		ps2webExecClear();
++		m_ps2webPending.clear(); // PS2WEB(JIT-04): pending blocks are gone
+ #endif
+ 		m_blocks.clear();
+ 		m_blockOutLinks.clear();
+@@ -151,6 +164,7 @@ protected:
+ 		m_blockLookup.AddBlock(block.get());
+ #ifdef __EMSCRIPTEN__
+ 		ps2webExecInsert(block->GetBeginAddress(), block->GetWasmTableIndex()); // PS2WEB(F3 W2.2b.2a)
++		ps2webBatchEnqueue(block);                                              // PS2WEB(JIT-04)
+ #endif
+ 		m_blocks.insert(std::move(block));
+ 	}
+@@ -177,6 +191,100 @@ protected:
+ 		m_ps2webKey[h] = k; m_ps2webVal[h] = idx;
+ 		if(ps2webExecLookup(pc) != idx) g_ps2webExecMismatches.fetch_add(1, std::memory_order_relaxed);
+ 	}
++	// ===================== PS2WEB(JIT-04): tiered re-batching =====================
++	// Tier 1: a block is compiled into its OWN module (upstream behaviour) so it is executable
++	// on first dispatch — Play! compiles lazily, we cannot wait to fill a batch.
++	// Tier 2: once PS2WEB_BATCH_SIZE blocks pile up, re-emit their function bodies as ONE module,
++	// re-point each block at it, and drop the solo modules. The engine then reclaims their
++	// code-space (measured: ~18.9 KB per module — docs/JIT-04-BATCHING.md).
++	static const uint32 PS2WEB_BATCH_SIZE = 32;
++
++	void ps2webBatchEnqueue(const BasicBlockPtr& block)
++	{
++		if(block->Ps2webGetModuleBytes().empty()) return; //dedup'd block: shares another module
++		m_ps2webPending.push_back(block);
++		if(m_ps2webPending.size() >= PS2WEB_BATCH_SIZE) ps2webBatchFlush();
++	}
++
++	void ps2webBatchFlush()
++	{
++		auto pending = std::move(m_ps2webPending);
++		m_ps2webPending.clear();
++		if(pending.size() < 2)
++		{
++			for(auto& weakBlock : pending)
++			{
++				if(auto block = weakBlock.lock()) block->Ps2webClearModuleBytes();
++			}
++			return;
++		}
++
++		CWasmModuleBuilder builder;
++		Jitter::CWasmFunctionRegistry::AddCanonicalFunctionTypes(builder);
++
++		std::vector<BasicBlockPtr> batched;
++		batched.reserve(pending.size());
++
++		for(auto& weakBlock : pending)
++		{
++			auto block = weakBlock.lock();
++			//Guard 1: the block was invalidated/recycled while pending -> drop it. Re-pointing a
++			//dead block would resurrect a stale PC->index entry (HANDOFF §3 #4).
++			if(!block) { g_ps2webBatchSkipped.fetch_add(1, std::memory_order_relaxed); continue; }
++			//Guard 2: this PC no longer resolves to THIS block (SMC replaced it) -> drop it.
++			if(m_blockLookup.FindBlockAt(block->GetBeginAddress()) != block.get())
++			{
++				block->Ps2webClearModuleBytes();
++				g_ps2webBatchSkipped.fetch_add(1, std::memory_order_relaxed);
++				continue;
++			}
++			CWasmModuleBuilder::FunctionCode body;
++			const auto& moduleBytes = block->Ps2webGetModuleBytes();
++			if(moduleBytes.empty() ||
++			   !CWasmModuleBuilder::ExtractSingleFunctionBody(moduleBytes.data(),
++			                                                  static_cast<uint32>(moduleBytes.size()), body))
++			{
++				block->Ps2webClearModuleBytes();
++				g_ps2webBatchSkipped.fetch_add(1, std::memory_order_relaxed);
++				continue;
++			}
++			builder.AddRawFunctionBody(std::move(body));
++			batched.push_back(block);
++		}
++
++		if(batched.size() < 2)
++		{
++			for(auto& block : batched) block->Ps2webClearModuleBytes();
++			return;
++		}
++
++		Framework::CMemStream stream;
++		builder.WriteModule(stream);
++
++		auto functions = CMemoryFunction::CreateBatch(stream.GetBuffer(), stream.GetSize(),
++		                                              static_cast<uint32>(batched.size()));
++		assert(functions.size() == batched.size());
++
++		for(uint32 i = 0; i < batched.size(); i++)
++		{
++			auto& block = batched[i];
++			block->Ps2webRepoint(std::move(functions[i])); //drops the solo module
++			uint32 pc = block->GetBeginAddress();
++			uint32 tableIndex = block->GetWasmTableIndex();
++			//Both maps MUST follow the block to its new table index, or the harness audits
++			//(execMismatches / chainTableMismatches) go non-zero and the gate fails.
++			ps2webExecInsert(pc, tableIndex);
++			{
++				std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx);
++				g_ps2webChainMap[pc] = tableIndex;
++				ps2webChainInsert(pc, tableIndex);
++			}
++		}
++	}
++
++	std::vector<std::weak_ptr<CBasicBlock>> m_ps2webPending; // PS2WEB(JIT-04)
++	// =============================================================================
++
+ 	void ps2webExecErase(uint32 pc) {
+ 		if(m_ps2webKey.empty()) return;
+ 		uint32 k = pc + 1, h = ps2webExecHash(pc);
+diff --git a/Source/ui_js/Main.cpp b/Source/ui_js/Main.cpp
+index e1877de9..0b1cf853 100644
+--- a/Source/ui_js/Main.cpp
++++ b/Source/ui_js/Main.cpp
+@@ -162,6 +162,13 @@ extern std::atomic<uint32_t> g_ps2webExecMismatches;
+ extern std::atomic<uint32_t> g_ps2webModulesCreated;
+ extern std::atomic<uint32_t> g_ps2webInstancesCreated;
+ extern std::atomic<uint64_t> g_ps2webModuleBytes;
++// PS2WEB(JIT-04): with two-tier re-batching the cumulative count RISES (solo module + batch
++// module), so modulesLive — how many are alive at once — is the metric that proves the win.
++extern std::atomic<int32_t>  g_ps2webModulesLive;
++extern std::atomic<uint32_t> g_ps2webModulesReleased;
++extern std::atomic<uint32_t> g_ps2webBatchesEmitted;
++extern std::atomic<uint32_t> g_ps2webBatchedBlocks;
++extern std::atomic<uint32_t> g_ps2webBatchSkipped;
+ extern std::unordered_map<uint32, uint32> g_ps2webChainMap;
+ extern std::mutex g_ps2webChainMapMtx;
+ uint32 ps2webChainLookup(uint32);
+@@ -172,6 +179,11 @@ int getExecMismatches() { return static_cast<int>(g_ps2webExecMismatches.load())
+ int getModulesCreated() { return static_cast<int>(g_ps2webModulesCreated.load()); }
+ int getInstancesCreated() { return static_cast<int>(g_ps2webInstancesCreated.load()); }
+ double getModuleBytes() { return static_cast<double>(g_ps2webModuleBytes.load()); }
++int getModulesLive() { return static_cast<int>(g_ps2webModulesLive.load()); }
++int getModulesReleased() { return static_cast<int>(g_ps2webModulesReleased.load()); }
++int getBatchesEmitted() { return static_cast<int>(g_ps2webBatchesEmitted.load()); }
++int getBatchedBlocks() { return static_cast<int>(g_ps2webBatchedBlocks.load()); }
++int getBatchSkipped() { return static_cast<int>(g_ps2webBatchSkipped.load()); }
+ int getChainMapEntries() { std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx); return static_cast<int>(g_ps2webChainMap.size()); }
+ int getChainTableMismatches() { std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx); int bad=0; for(auto& kv : g_ps2webChainMap) if(ps2webChainLookup(kv.first) != kv.second) ++bad; return bad; }
+ // PS2WEB(F3): deterministic emulation-state hash (EE base RAM, strided). Replaces the unreliable
+@@ -203,6 +215,11 @@ EMSCRIPTEN_BINDINGS(Play)
+ 	function("getModulesCreated", &getModulesCreated);
+ 	function("getInstancesCreated", &getInstancesCreated);
+ 	function("getModuleBytes", &getModuleBytes);
++	function("getModulesLive", &getModulesLive);
++	function("getModulesReleased", &getModulesReleased);
++	function("getBatchesEmitted", &getBatchesEmitted);
++	function("getBatchedBlocks", &getBatchedBlocks);
++	function("getBatchSkipped", &getBatchSkipped);
+ 	function("getChainMapEntries", &getChainMapEntries);
+ 	function("getChainTableMismatches", &getChainTableMismatches);
+ 	function("getStateHash", &getStateHash);

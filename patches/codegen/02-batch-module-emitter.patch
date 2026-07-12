@@ -1,5 +1,5 @@
 diff --git a/include/Jitter_CodeGen_Wasm.h b/include/Jitter_CodeGen_Wasm.h
-index e2f1fbe..534ca2b 100644
+index e2f1fbe..eb404b2 100644
 --- a/include/Jitter_CodeGen_Wasm.h
 +++ b/include/Jitter_CodeGen_Wasm.h
 @@ -1,6 +1,8 @@
@@ -11,7 +11,7 @@ index e2f1fbe..534ca2b 100644
  #include "Jitter_CodeGen.h"
  #include "MemStream.h"
  
-@@ -20,6 +22,14 @@ namespace Jitter
+@@ -20,6 +22,19 @@ namespace Jitter
  		static void RegisterFunction(uintptr_t, const char*, const char*);
  		static const WASM_FUNCTION_INFO* FindFunction(uintptr_t);
  
@@ -23,14 +23,99 @@ index e2f1fbe..534ca2b 100644
 +		// signature) is forced to index 0 — the Function section emits signature index 0.
 +		static const std::vector<std::string>& GetCanonicalSignatures();
 +
++		// PS2WEB(JIT-04): add the canonical type section to a module the BATCHER is building
++		// (the batcher lives outside the codegen, in the executor, and must emit exactly the
++		// same type table so the bodies it concatenates keep valid signature indices).
++		static void AddCanonicalFunctionTypes(CWasmModuleBuilder&);
++
  	private:
  		static std::map<uintptr_t, WASM_FUNCTION_INFO> m_functions;
  	};
+diff --git a/include/MemoryFunction.h b/include/MemoryFunction.h
+index fca4a0f..3d511cf 100644
+--- a/include/MemoryFunction.h
++++ b/include/MemoryFunction.h
+@@ -1,6 +1,8 @@
+ #pragma once
+ 
+ #include "Types.h"
++#include <memory>
++#include <vector>
+ 
+ #if defined(__EMSCRIPTEN__)
+ #include <emscripten/bind.h>
+@@ -31,6 +33,15 @@ public:
+ 
+ 	CMemoryFunction CreateInstance();
+ 
++#if defined(__EMSCRIPTEN__)
++	// PS2WEB(JIT-04): build ONE module holding N block functions (exports codeGenFunc0..N-1)
++	// and hand back N CMemoryFunctions, each with its own indirect-table index but SHARING the
++	// module. The shared lifetime is refcounted: when the last of the N is destroyed, the module
++	// — and the browser code-space it occupies — is released. This is what makes the tiered
++	// re-batching of docs/JIT-04-BATCHING.md actually reclaim memory.
++	static std::vector<CMemoryFunction> CreateBatch(const void* code, size_t size, uint32 count);
++#endif
++
+ private:
+ 	void ClearCache();
+ 	void Reset();
+@@ -39,5 +50,8 @@ private:
+ 	size_t m_size;
+ #if defined(__EMSCRIPTEN__)
+ 	emscripten::val m_wasmModule;
++	//PS2WEB(JIT-04): shared refcount; its deleter decrements modulesLive when the last
++	//CMemoryFunction backed by this module goes away.
++	std::shared_ptr<void> m_ps2webModuleLifetime;
+ #endif
+ };
+diff --git a/include/WasmModuleBuilder.h b/include/WasmModuleBuilder.h
+index 72a0582..d472c59 100644
+--- a/include/WasmModuleBuilder.h
++++ b/include/WasmModuleBuilder.h
+@@ -31,11 +31,25 @@ public:
+ 	void AddFunctionType(FUNCTION_TYPE);
+ 	void AddFunction(FUNCTION);
+ 
++	// PS2WEB(JIT-04): add an ALREADY-ENCODED function body (local decls + code + end), as
++	// extracted from a previously emitted single-function module. This is what lets us pack
++	// N independently-compiled MIPS blocks into one module without recompiling them.
++	// Only sound because every module now emits the same canonical type table, so the
++	// call_indirect signature indices inside the body remain valid. See docs/JIT-04-BATCHING.md.
++	void AddRawFunctionBody(FunctionCode);
++
++	// Pull the single function body out of a module emitted by WriteModule (N==1).
++	// Returns false if the bytes don't look like one of our modules.
++	static bool ExtractSingleFunctionBody(const uint8* moduleBytes, uint32 size, FunctionCode& outBody);
++
++	uint32 GetFunctionCount() const;
++
+ 	void WriteModule(Framework::CStream&);
+ 
+ private:
+ 	void WriteSectionHeader(Framework::CStream&, uint8, uint32);
++	static FunctionCode EncodeFunctionBody(const FUNCTION&);
+ 
+ 	std::vector<FUNCTION_TYPE> m_functionTypes;
+-	std::vector<FUNCTION> m_functions;
++	std::vector<FunctionCode> m_bodies; //Encoded bodies (local decls + code), in export order
+ };
 diff --git a/src/Jitter_CodeGen_Wasm.cpp b/src/Jitter_CodeGen_Wasm.cpp
-index 3f86e4a..ff599d7 100644
+index 3f86e4a..ac886eb 100644
 --- a/src/Jitter_CodeGen_Wasm.cpp
 +++ b/src/Jitter_CodeGen_Wasm.cpp
-@@ -217,6 +217,32 @@ const CWasmFunctionRegistry::WASM_FUNCTION_INFO* CWasmFunctionRegistry::FindFunc
+@@ -8,6 +8,10 @@
+ 
+ using namespace Jitter;
+ 
++//PS2WEB(JIT-04): forward decl — used by CWasmFunctionRegistry::AddCanonicalFunctionTypes above
++//its definition.
++static CWasmModuleBuilder::FUNCTION_TYPE Ps2webMakeFunctionType(const std::string&);
++
+ #include "Jitter_CodeGen_Wasm_LoadStore.h"
+ 
+ template <uint32 op>
+@@ -217,6 +221,40 @@ const CWasmFunctionRegistry::WASM_FUNCTION_INFO* CWasmFunctionRegistry::FindFunc
  	return &fctIterator->second;
  }
  
@@ -60,10 +145,18 @@ index 3f86e4a..ff599d7 100644
 +	return canonical;
 +}
 +
++void CWasmFunctionRegistry::AddCanonicalFunctionTypes(CWasmModuleBuilder& moduleBuilder)
++{
++	for(const auto& signature : GetCanonicalSignatures())
++	{
++		moduleBuilder.AddFunctionType(Ps2webMakeFunctionType(signature));
++	}
++}
++
  #else
  
  void CWasmFunctionRegistry::RegisterFunction(uintptr_t functionPtr, const char* functionName, const char* functionSig)
-@@ -524,7 +550,33 @@ void CCodeGen_Wasm::BuildLabelFlows(const StatementList& statements)
+@@ -524,7 +562,33 @@ void CCodeGen_Wasm::BuildLabelFlows(const StatementList& statements)
  
  void CCodeGen_Wasm::PrepareSignatures(CWasmModuleBuilder& moduleBuilder, const StatementList& statements)
  {
@@ -98,16 +191,158 @@ index 3f86e4a..ff599d7 100644
  	RegisterSignature(moduleBuilder, "vi");
  
  	for(const auto& statement : statements)
-@@ -545,6 +597,7 @@ void CCodeGen_Wasm::PrepareSignatures(CWasmModuleBuilder& moduleBuilder, const S
+@@ -545,9 +609,12 @@ void CCodeGen_Wasm::PrepareSignatures(CWasmModuleBuilder& moduleBuilder, const S
  			RegisterSignature(moduleBuilder, fctInfo->signature);
  		}
  	}
 +#endif
  }
  
- void CCodeGen_Wasm::RegisterSignature(CWasmModuleBuilder& moduleBuilder, std::string signature)
+-void CCodeGen_Wasm::RegisterSignature(CWasmModuleBuilder& moduleBuilder, std::string signature)
++// PS2WEB(JIT-04): signature string -> wasm functype. Shared by the codegen and by the batcher
++// (via CWasmFunctionRegistry::AddCanonicalFunctionTypes) so both emit an identical type section.
++static CWasmModuleBuilder::FUNCTION_TYPE Ps2webMakeFunctionType(const std::string& signature)
+ {
+ 	CWasmModuleBuilder::FUNCTION_TYPE functionType;
+ 
+@@ -582,8 +649,12 @@ void CCodeGen_Wasm::RegisterSignature(CWasmModuleBuilder& moduleBuilder, std::st
+ 		}
+ 	}
+ 
+-	moduleBuilder.AddFunctionType(std::move(functionType));
++	return functionType;
++}
+ 
++void CCodeGen_Wasm::RegisterSignature(CWasmModuleBuilder& moduleBuilder, std::string signature)
++{
++	moduleBuilder.AddFunctionType(Ps2webMakeFunctionType(signature));
+ 	m_signatures.insert(std::make_pair(signature, static_cast<uint32>(m_signatures.size())));
+ }
+ 
+diff --git a/src/MemoryFunction.cpp b/src/MemoryFunction.cpp
+index caae5a0..208579a 100644
+--- a/src/MemoryFunction.cpp
++++ b/src/MemoryFunction.cpp
+@@ -62,6 +62,23 @@ EM_JS(void, WasmDeleteFunction, (int fctId),
+ {
+ 	removeFunction(fctId);
+ });
++EM_JS(emscripten::EM_VAL, WasmCreateBatchModule, (uintptr_t code, uintptr_t size, int count, uintptr_t outIds),
++{
++	let moduleBytes = HEAP8.subarray(code, code + size);
++	let module = new WebAssembly.Module(moduleBytes);
++	let moduleInstance = new WebAssembly.Instance(module, {
++		env: {
++			memory: wasmMemory,
++			fctTable : Module.codeGenImportTable
++		}
++	});
++	for(let i = 0; i < count; i++)
++	{
++		let fct = moduleInstance.exports['codeGenFunc' + i];
++		HEAP32[(outIds >> 2) + i] = addFunction(fct, 'vi');
++	}
++	return Emval.toHandle(module);
++});
+ EM_JS(emscripten::EM_VAL, WasmCreateModule, (uintptr_t code, uintptr_t size),
+ {
+ 	//var fs = require('fs');
+@@ -89,6 +106,23 @@ EM_JS(emscripten::EM_VAL, WasmCreateModule, (uintptr_t code, uintptr_t size),
+ std::atomic<uint32_t> g_ps2webModulesCreated{0};
+ std::atomic<uint32_t> g_ps2webInstancesCreated{0};
+ std::atomic<uint64_t> g_ps2webModuleBytes{0};
++// PS2WEB(JIT-04): with two-tier re-batching the CUMULATIVE count goes UP (we build the solo
++// module AND the batch), so the metric that proves the win is modulesLive — how many modules
++// are alive at once. That is what the browser's code-space actually pays for.
++std::atomic<int32_t> g_ps2webModulesLive{0};
++std::atomic<uint32_t> g_ps2webModulesReleased{0};
++std::atomic<uint32_t> g_ps2webBatchesEmitted{0};
++std::atomic<uint32_t> g_ps2webBatchedBlocks{0};
++
++static std::shared_ptr<void> Ps2webMakeModuleLifetime()
++{
++	g_ps2webModulesLive.fetch_add(1, std::memory_order_relaxed);
++	//Non-null pointer + custom deleter: the deleter is guaranteed to run on last ref drop.
++	return std::shared_ptr<void>(reinterpret_cast<void*>(1), [](void*) {
++		g_ps2webModulesLive.fetch_sub(1, std::memory_order_relaxed);
++		g_ps2webModulesReleased.fetch_add(1, std::memory_order_relaxed);
++	});
++}
+ #endif
+ 
+ CMemoryFunction::CMemoryFunction()
+@@ -146,6 +180,7 @@ CMemoryFunction::CMemoryFunction(const void* code, size_t size)
+ 	g_ps2webModulesCreated.fetch_add(1, std::memory_order_relaxed);   // PS2WEB(JIT-04)
+ 	g_ps2webInstancesCreated.fetch_add(1, std::memory_order_relaxed); // PS2WEB(JIT-04)
+ 	g_ps2webModuleBytes.fetch_add(size, std::memory_order_relaxed);   // PS2WEB(JIT-04)
++	m_ps2webModuleLifetime = Ps2webMakeModuleLifetime();              // PS2WEB(JIT-04)
+ #endif
+ 	ClearCache();
+ #if !defined(MEMFUNC_USE_WASM)
+@@ -187,6 +222,7 @@ void CMemoryFunction::Reset()
+ 	m_size = 0;
+ #if defined(MEMFUNC_USE_WASM)
+ 	m_wasmModule = emscripten::val();
++	m_ps2webModuleLifetime.reset(); // PS2WEB(JIT-04): last ref => module (and its code-space) freed
+ #endif
+ }
+ 
+@@ -202,6 +238,7 @@ CMemoryFunction& CMemoryFunction::operator =(CMemoryFunction&& rhs)
+ 	std::swap(m_size, rhs.m_size);
+ #if defined(MEMFUNC_USE_WASM)
+ 	std::swap(m_wasmModule, rhs.m_wasmModule);
++	std::swap(m_ps2webModuleLifetime, rhs.m_ps2webModuleLifetime); // PS2WEB(JIT-04)
+ #endif
+ 	return (*this);
+ }
+@@ -249,6 +286,7 @@ CMemoryFunction CMemoryFunction::CreateInstance()
+ #if defined(MEMFUNC_USE_WASM)
+ 	CMemoryFunction result;
+ 	result.m_wasmModule = m_wasmModule;
++	result.m_ps2webModuleLifetime = m_ps2webModuleLifetime; // PS2WEB(JIT-04): same module, no new one
+ 	result.m_size = m_size;
+ 	result.m_code = reinterpret_cast<void*>(WasmCreateFunction(m_wasmModule.as_handle()));
+ 	g_ps2webInstancesCreated.fetch_add(1, std::memory_order_relaxed); // PS2WEB(JIT-04)
+@@ -257,3 +295,37 @@ CMemoryFunction CMemoryFunction::CreateInstance()
+ 	return CMemoryFunction(GetCode(), GetSize());
+ #endif
+ }
++
++#if defined(MEMFUNC_USE_WASM)
++// PS2WEB(JIT-04): see header. One module, N table entries, ONE shared refcounted lifetime.
++std::vector<CMemoryFunction> CMemoryFunction::CreateBatch(const void* code, size_t size, uint32 count)
++{
++	std::vector<int32_t> tableIndices(count, 0);
++	auto moduleHandle = WasmCreateBatchModule(
++	    reinterpret_cast<uintptr_t>(code), static_cast<uintptr_t>(size),
++	    static_cast<int>(count), reinterpret_cast<uintptr_t>(tableIndices.data()));
++
++	auto moduleValue = emscripten::val::take_ownership(moduleHandle);
++
++	g_ps2webModulesCreated.fetch_add(1, std::memory_order_relaxed);
++	g_ps2webInstancesCreated.fetch_add(1, std::memory_order_relaxed);
++	g_ps2webModuleBytes.fetch_add(size, std::memory_order_relaxed);
++	g_ps2webBatchesEmitted.fetch_add(1, std::memory_order_relaxed);
++	g_ps2webBatchedBlocks.fetch_add(count, std::memory_order_relaxed);
++
++	auto lifetime = Ps2webMakeModuleLifetime();
++
++	std::vector<CMemoryFunction> result;
++	result.reserve(count);
++	for(uint32 i = 0; i < count; i++)
++	{
++		CMemoryFunction function;
++		function.m_wasmModule = moduleValue;          //refcounted handle to the SAME module
++		function.m_ps2webModuleLifetime = lifetime;   //last one out frees the module
++		function.m_size = size;
++		function.m_code = reinterpret_cast<void*>(static_cast<uintptr_t>(tableIndices[i]));
++		result.push_back(std::move(function));
++	}
++	return result;
++}
++#endif
 diff --git a/src/WasmModuleBuilder.cpp b/src/WasmModuleBuilder.cpp
-index 9f4ad6f..7e6d4e4 100644
+index 9f4ad6f..96e6ce8 100644
 --- a/src/WasmModuleBuilder.cpp
 +++ b/src/WasmModuleBuilder.cpp
 @@ -1,6 +1,7 @@
@@ -118,10 +353,106 @@ index 9f4ad6f..7e6d4e4 100644
  #include "WasmDefs.h"
  
  static void WriteName(Framework::CStream& stream, const char* str)
-@@ -75,10 +76,22 @@ void CWasmModuleBuilder::AddFunction(FUNCTION function)
- 	m_functions.push_back(std::move(function));
+@@ -70,15 +71,117 @@ void CWasmModuleBuilder::AddFunctionType(FUNCTION_TYPE functionType)
+ 	m_functionTypes.push_back(std::move(functionType));
  }
  
++// PS2WEB(JIT-04): encode local decls + code into a single body blob at Add time, so that
++// bodies produced by the codegen and bodies extracted from previously-emitted modules are
++// handled uniformly by WriteModule.
++CWasmModuleBuilder::FunctionCode CWasmModuleBuilder::EncodeFunctionBody(const FUNCTION& function)
++{
++	assert(function.localI32Count < 0x80);
++	assert(function.localI64Count < 0x80);
++	assert(function.localF32Count < 0x80);
++	assert(function.localV128Count < 0x80);
++
++	uint32 localDeclCount = 0;
++	if(function.localI32Count != 0) localDeclCount++;
++	if(function.localI64Count != 0) localDeclCount++;
++	if(function.localF32Count != 0) localDeclCount++;
++	if(function.localV128Count != 0) localDeclCount++;
++
++	FunctionCode body;
++	body.push_back(static_cast<uint8>(localDeclCount));
++	const auto pushLocal =
++	    [&body](uint32 count, uint8 type) {
++		    if(count == 0) return;
++		    body.push_back(static_cast<uint8>(count));
++		    body.push_back(type);
++	    };
++	pushLocal(function.localI32Count, Wasm::TYPE_I32);
++	pushLocal(function.localI64Count, Wasm::TYPE_I64);
++	pushLocal(function.localF32Count, Wasm::TYPE_F32);
++	pushLocal(function.localV128Count, Wasm::TYPE_V128);
++	body.insert(body.end(), function.code.begin(), function.code.end());
++	return body;
++}
++
+ void CWasmModuleBuilder::AddFunction(FUNCTION function)
+ {
+-	m_functions.push_back(std::move(function));
++	m_bodies.push_back(EncodeFunctionBody(function));
++}
++
++void CWasmModuleBuilder::AddRawFunctionBody(FunctionCode body)
++{
++	m_bodies.push_back(std::move(body));
++}
++
++uint32 CWasmModuleBuilder::GetFunctionCount() const
++{
++	return static_cast<uint32>(m_bodies.size());
++}
++
++// Walk the sections of a module emitted by WriteModule and pull out its single function body.
++// The prefix (type/import/function/export) is identical across all our modules, but we parse
++// properly instead of assuming a fixed offset.
++bool CWasmModuleBuilder::ExtractSingleFunctionBody(const uint8* moduleBytes, uint32 size, FunctionCode& outBody)
++{
++	const auto readULeb =
++	    [&](uint32& pos, uint32& outValue) -> bool {
++		    uint32 result = 0, shift = 0;
++		    while(pos < size)
++		    {
++			    uint8 byte = moduleBytes[pos++];
++			    result |= static_cast<uint32>(byte & 0x7F) << shift;
++			    if((byte & 0x80) == 0)
++			    {
++				    outValue = result;
++				    return true;
++			    }
++			    shift += 7;
++			    if(shift > 28) return false;
++		    }
++		    return false;
++	    };
++
++	if(size < 8) return false;
++	uint32 pos = 8; //magic + version
++	while(pos < size)
++	{
++		uint8 sectionId = moduleBytes[pos++];
++		uint32 sectionSize = 0;
++		if(!readULeb(pos, sectionSize)) return false;
++		if(pos + sectionSize > size) return false;
++		if(sectionId == Wasm::SECTION_ID_CODE)
++		{
++			uint32 codePos = pos;
++			uint32 functionCount = 0;
++			if(!readULeb(codePos, functionCount)) return false;
++			if(functionCount != 1) return false; //only single-function modules can be lifted
++			uint32 bodySize = 0;
++			if(!readULeb(codePos, bodySize)) return false;
++			if(codePos + bodySize > size) return false;
++			outBody.assign(moduleBytes + codePos, moduleBytes + codePos + bodySize);
++			return true;
++		}
++		pos += sectionSize;
++	}
++	return false;
++}
++
 +// PS2WEB(JIT-04): emits a module with N functions (was: hardcoded to exactly 1).
 +// N==1 is byte-identical to upstream (export name "codeGenFunc") so the single-block path
 +// and the cube golden are untouched. N>1 exports "codeGenFunc0".."codeGenFuncN-1" and is
@@ -132,18 +463,42 @@ index 9f4ad6f..7e6d4e4 100644
 +{
 +	if(functionCount == 1) return "codeGenFunc"; //Upstream-compatible name
 +	return "codeGenFunc" + std::to_string(index);
-+}
-+
+ }
+ 
  void CWasmModuleBuilder::WriteModule(Framework::CStream& stream)
  {
 -	//We only support a single function at the moment
 -	assert(m_functions.size() == 1);
-+	assert(!m_functions.empty());
-+	uint32 functionCount = static_cast<uint32>(m_functions.size());
++	assert(!m_bodies.empty());
++	uint32 functionCount = static_cast<uint32>(m_bodies.size());
  
  	stream.Write32(Wasm::BINARY_MAGIC);
  	stream.Write32(Wasm::BINARY_VERSION);
-@@ -120,7 +133,7 @@ void CWasmModuleBuilder::WriteModule(Framework::CStream& stream)
+@@ -98,21 +201,17 @@ void CWasmModuleBuilder::WriteModule(Framework::CStream& stream)
+ 		}
+ 
+ 		WriteSectionHeader(stream, Wasm::SECTION_ID_TYPE, sectionSize);
+-
+-		//Vector size
+ 		WriteULeb128(stream, m_functionTypes.size());
+ 
+ 		for(const auto& functionType : m_functionTypes)
+ 		{
+ 			stream.Write8(0x60); //Func
+-
+-			WriteULeb128(stream, functionType.params.size()); //Num params
++			WriteULeb128(stream, functionType.params.size());
+ 			for(uint32 i = 0; i < functionType.params.size(); i++)
+ 			{
+ 				stream.Write8(functionType.params[i]);
+ 			}
+-
+-			WriteULeb128(stream, functionType.results.size()); //Num results
++			WriteULeb128(stream, functionType.results.size());
+ 			for(uint32 i = 0; i < functionType.results.size(); i++)
+ 			{
+ 				stream.Write8(functionType.results[i]);
+@@ -120,21 +219,19 @@ void CWasmModuleBuilder::WriteModule(Framework::CStream& stream)
  		}
  	}
  
@@ -152,23 +507,38 @@ index 9f4ad6f..7e6d4e4 100644
  	{
  		WriteSectionHeader(stream, Wasm::SECTION_ID_IMPORT, 0x23);
  
-@@ -143,79 +156,107 @@ void CWasmModuleBuilder::WriteModule(Framework::CStream& stream)
+ 		stream.Write8(2); //Import vector size
+ 
+-		//Import 0
+-		WriteName(stream, "env");    //Import module name
+-		WriteName(stream, "memory"); //Import field name
++		WriteName(stream, "env");
++		WriteName(stream, "memory");
+ 		stream.Write8(Wasm::IMPORT_EXPORT_TYPE_MEMORY);
+-		stream.Write8(0x03);         //Limit type 3 (0x01 = has max, 0x02 = is shared?)
++		stream.Write8(0x03);         //Limit type 3 (has max + shared)
+ 		stream.Write8(0x01);         //Min
+ 		WriteULeb128(stream, 32768); //Max (default Emscripten value)
+ 
+-		//Import 1
+ 		WriteName(stream, "env");
+ 		WriteName(stream, "fctTable");
+ 		stream.Write8(Wasm::IMPORT_EXPORT_TYPE_TABLE);
+@@ -143,79 +240,59 @@ void CWasmModuleBuilder::WriteModule(Framework::CStream& stream)
  		stream.Write8(0x01); //Initial
  	}
  
 -	//Section "Function"
-+	//Section "Function": N functions, all of signature index 0 ("vi")
++	//Section "Function": N functions, all of canonical signature index 0 ("vi")
  	{
 -		WriteSectionHeader(stream, Wasm::SECTION_ID_FUNCTION, 0x02);
-+		uint32 sectionSize =
-+		    GetULeb128Size(functionCount) +
-+		    functionCount; //one byte per signature index (index 0)
- 
+-
 -		stream.Write8(1); //Function vector size
-+		WriteSectionHeader(stream, Wasm::SECTION_ID_FUNCTION, sectionSize);
- 
+-
 -		//Function 0
 -		stream.Write8(0); //Signature index
++		uint32 sectionSize = GetULeb128Size(functionCount) + functionCount;
++		WriteSectionHeader(stream, Wasm::SECTION_ID_FUNCTION, sectionSize);
 +		WriteULeb128(stream, functionCount);
 +		for(uint32 i = 0; i < functionCount; i++)
 +		{
@@ -180,6 +550,8 @@ index 9f4ad6f..7e6d4e4 100644
 +	//Section "Export": one export per function
  	{
 -		WriteSectionHeader(stream, Wasm::SECTION_ID_EXPORT, 15);
+-
+-		stream.Write8(1); //Export vector size
 +		uint32 sectionSize = GetULeb128Size(functionCount);
 +		for(uint32 i = 0; i < functionCount; i++)
 +		{
@@ -192,25 +564,23 @@ index 9f4ad6f..7e6d4e4 100644
 +			    GetULeb128Size(i);
 +		}
  
--		stream.Write8(1); //Export vector size
-+		WriteSectionHeader(stream, Wasm::SECTION_ID_EXPORT, sectionSize);
- 
 -		//Export 0
 -		WriteName(stream, "codeGenFunc");
 -		stream.Write8(Wasm::IMPORT_EXPORT_TYPE_FUNCTION);
 -		stream.Write8(0); //Function index
++		WriteSectionHeader(stream, Wasm::SECTION_ID_EXPORT, sectionSize);
 +		WriteULeb128(stream, functionCount);
 +		for(uint32 i = 0; i < functionCount; i++)
 +		{
 +			auto name = GetBlockExportName(i, functionCount);
 +			WriteName(stream, name.c_str());
 +			stream.Write8(Wasm::IMPORT_EXPORT_TYPE_FUNCTION);
-+			WriteULeb128(stream, i); //Function index
++			WriteULeb128(stream, i);
 +		}
  	}
  
 -	//Section "Code"
-+	//Section "Code": N bodies
++	//Section "Code": N pre-encoded bodies
  	{
 -		const auto& function = m_functions[0];
 -
@@ -231,48 +601,34 @@ index 9f4ad6f..7e6d4e4 100644
 -		    1 + //Vector size
 -		    GetULeb128Size(functionBodySize) +
 -		    functionBodySize;
-+		const auto getLocalDeclCount =
-+		    [](const FUNCTION& function) {
-+			    uint32 localDeclCount = 0;
-+			    if(function.localI32Count != 0) localDeclCount++;
-+			    if(function.localI64Count != 0) localDeclCount++;
-+			    if(function.localF32Count != 0) localDeclCount++;
-+			    if(function.localV128Count != 0) localDeclCount++;
-+			    return localDeclCount;
-+		    };
-+
 +		uint32 sectionSize = GetULeb128Size(functionCount);
-+		for(const auto& function : m_functions)
++		for(const auto& body : m_bodies)
 +		{
-+			assert(function.localI32Count < 0x80);
-+			assert(function.localI64Count < 0x80);
-+			assert(function.localF32Count < 0x80);
-+			assert(function.localV128Count < 0x80);
-+
-+			uint32 localDeclSize = (getLocalDeclCount(function) * 2) + 1;
-+			uint32 functionBodySize = static_cast<uint32>(function.code.size()) + localDeclSize;
-+			sectionSize += GetULeb128Size(functionBodySize) + functionBodySize;
++			uint32 bodySize = static_cast<uint32>(body.size());
++			sectionSize += GetULeb128Size(bodySize) + bodySize;
 +		}
  
  		WriteSectionHeader(stream, Wasm::SECTION_ID_CODE, sectionSize);
- 
--		stream.Write8(1); //Function vector size
 +		WriteULeb128(stream, functionCount);
  
+-		stream.Write8(1); //Function vector size
+-
 -		//Function 0
 -		WriteULeb128(stream, functionBodySize); //Function body size
 -		WriteULeb128(stream, localDeclCount);   //Local declaration count
 -		if(function.localI32Count != 0)
-+		for(const auto& function : m_functions)
- 		{
+-		{
 -			WriteULeb128(stream, function.localI32Count); //Local type count
 -			stream.Write8(Wasm::TYPE_I32);
 -		}
 -		if(function.localI64Count != 0)
--		{
++		for(const auto& body : m_bodies)
+ 		{
 -			WriteULeb128(stream, function.localI64Count);
 -			stream.Write8(Wasm::TYPE_I64);
--		}
++			WriteULeb128(stream, body.size());
++			stream.Write(body.data(), body.size());
+ 		}
 -		if(function.localF32Count != 0)
 -		{
 -			WriteULeb128(stream, function.localF32Count);
@@ -283,36 +639,8 @@ index 9f4ad6f..7e6d4e4 100644
 -			WriteULeb128(stream, function.localV128Count);
 -			stream.Write8(Wasm::TYPE_V128);
 -		}
-+			uint32 localDeclCount = getLocalDeclCount(function);
-+			uint32 localDeclSize = (localDeclCount * 2) + 1;
-+			uint32 functionBodySize = static_cast<uint32>(function.code.size()) + localDeclSize;
- 
+-
 -		stream.Write(function.code.data(), function.code.size());
-+			WriteULeb128(stream, functionBodySize); //Function body size
-+			WriteULeb128(stream, localDeclCount);   //Local declaration count
-+			if(function.localI32Count != 0)
-+			{
-+				WriteULeb128(stream, function.localI32Count); //Local type count
-+				stream.Write8(Wasm::TYPE_I32);
-+			}
-+			if(function.localI64Count != 0)
-+			{
-+				WriteULeb128(stream, function.localI64Count);
-+				stream.Write8(Wasm::TYPE_I64);
-+			}
-+			if(function.localF32Count != 0)
-+			{
-+				WriteULeb128(stream, function.localF32Count);
-+				stream.Write8(Wasm::TYPE_F32);
-+			}
-+			if(function.localV128Count != 0)
-+			{
-+				WriteULeb128(stream, function.localV128Count);
-+				stream.Write8(Wasm::TYPE_V128);
-+			}
-+
-+			stream.Write(function.code.data(), function.code.size());
-+		}
  	}
  }
  
