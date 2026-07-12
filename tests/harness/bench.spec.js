@@ -9,10 +9,19 @@ const path = require('path');
 const FIXTURE = process.env.BENCH_FIXTURE || 'cube';
 const SECONDS = parseInt(process.env.BENCH_SECONDS || '30', 10);
 const WARMUP = parseInt(process.env.BENCH_WARMUP || '5', 10);
+// JIT-04 bisect: 0 = batcher off (upstream), 1 = batch+re-point but KEEP solo modules alive,
+// 2 = full (re-point + release). One build, three hypotheses.
+const BATCH_MODE = parseInt(process.env.BENCH_BATCH_MODE || '0', 10);
 
 test(`bench ${FIXTURE}`, async ({ page }) => {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__ps2web && window.__ps2web.ready, null, { timeout: 60000 });
+
+  // Set the batch mode BEFORE booting, so the batcher's behaviour is fixed for the whole run.
+  const modeSet = await page.evaluate((m) => {
+    try { window.PlayModule.setBatchMode(m); return window.PlayModule.getBatchMode(); } catch (e) { return -1; }
+  }, BATCH_MODE);
+  console.log(`[jit-04] batchMode requested=${BATCH_MODE} actual=${modeSet}`);
 
   const booted = await page.evaluate((f) => window.__ps2web.bootElfFromUrl(`/fixtures/${f}.elf`), FIXTURE);
   expect(booted.size, 'fixture ELF non-empty').toBeGreaterThan(0);
@@ -44,6 +53,7 @@ test(`bench ${FIXTURE}`, async ({ page }) => {
 
   const result = {
     fixture: FIXTURE,
+    batchMode: BATCH_MODE,
     rig: 'ci-headless-swiftshader',
     seconds: SECONDS, warmup: WARMUP,
     avgFps: Math.round(avg(fpsArr) * 100) / 100,
@@ -88,7 +98,8 @@ test(`bench ${FIXTURE}`, async ({ page }) => {
     generatedAt: new Date().toISOString(),
   };
 
-  fs.writeFileSync(path.join(outDir, `${FIXTURE}.json`), JSON.stringify(result, null, 2));
+  const suffix = BATCH_MODE === 0 ? '' : `-mode${BATCH_MODE}`;
+  fs.writeFileSync(path.join(outDir, `${FIXTURE}${suffix}.json`), JSON.stringify(result, null, 2));
   // Seed the immutable baseline ONLY if it doesn't exist yet (never overwrite).
   if (FIXTURE === 'cube' && !fs.existsSync(baselinePath)) {
     fs.writeFileSync(baselinePath, JSON.stringify(result, null, 2));
@@ -101,13 +112,20 @@ test(`bench ${FIXTURE}`, async ({ page }) => {
   console.log(`[jit-04] ${FIXTURE} modulesLive=${result.modulesLive} released=${result.modulesReleased} batches=${result.batchesEmitted} batchedBlocks=${result.batchedBlocks} skipped=${result.batchSkipped} blocksPerLiveModule=${result.blocksPerLiveModule}`);
   // Batching gate: with 32-block batches the live-module count must collapse. Non-fatal if the
   // fixture is too small to fill a batch, but cube/vu1 produce ~1000 blocks so it must trigger.
-  if (result.jitBlocks > 200) {
+  if (BATCH_MODE === 2 && result.jitBlocks > 200) {
     expect(result.batchesEmitted, 'batcher must emit batch modules').toBeGreaterThan(0);
     expect(result.blocksPerLiveModule, 'blocks per LIVE module (code-space win)').toBeGreaterThan(5);
   }
   // F3 correctness gate: cube's EE-state hash at a fixed frame is DETERMINISTIC and must not
   // change under dispatch-only JIT changes (chaining). vu1 is NOT gated on state (async VU1 =>
   // nondeterministic); vu1 is the speedup fixture (fps). See docs/BENCH-F3.md.
+  // Gate hygiene: an emulator that DIED (0 fps, 0 frames, hash 0) must fail differently from one
+  // whose hash DRIFTED. Previously a dead emulator reported stateHashAtN=0 alongside
+  // hashMatchesBaseline=true, which is actively misleading.
+  expect(result.avgFps, 'EMULATOR IS DEAD (0 fps) — not a hash drift, it stopped executing').toBeGreaterThan(0);
+  expect(result.totalFrames, 'EMULATOR IS DEAD (rendered no frames)').toBeGreaterThan(0);
+  expect(result.stateHashAtN, 'EMULATOR NEVER REACHED THE ANCHOR FRAME (hash still 0)').not.toBe(0);
+
   expect(result.chainTableMismatches, 'flat linear-memory chain table must match the reference map (0 mismatches)').toBe(0);
   expect(result.execMismatches, 'per-executor map insert/lookup must be self-consistent (0 mismatches)').toBe(0);
 

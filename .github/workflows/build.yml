@@ -209,6 +209,27 @@ jobs:
           BENCH_SECONDS: "20"
           BENCH_WARMUP: "6"
         run: npx playwright test -c tests/harness/playwright.harness.config.js
+
+      # --- JIT-04 BISECT: one build, three hypotheses. The batcher died the instant it first
+      # flushed. Mode 1 (batch + re-point, solo modules KEPT alive) vs mode 2 (also release)
+      # tells us whether the re-emitted bodies are wrong or the release path is. Both are
+      # non-fatal: we want the DATA, not a red build.
+      - name: JIT-04 bisect — cube mode 1 (re-point, NO release)
+        continue-on-error: true
+        env:
+          BENCH_FIXTURE: cube
+          BENCH_SECONDS: "20"
+          BENCH_WARMUP: "6"
+          BENCH_BATCH_MODE: "1"
+        run: npx playwright test -c tests/harness/playwright.harness.config.js
+      - name: JIT-04 bisect — cube mode 2 (re-point + release)
+        continue-on-error: true
+        env:
+          BENCH_FIXTURE: cube
+          BENCH_SECONDS: "20"
+          BENCH_WARMUP: "6"
+          BENCH_BATCH_MODE: "2"
+        run: npx playwright test -c tests/harness/playwright.harness.config.js
       - name: OPFS persistence E2E (F5 W1)
         run: npx playwright test -c tests/e2e/playwright.e2e.config.js
       - name: Upload bench results
