@@ -38,8 +38,16 @@ esos ficheros en modo BINARIO preservando `\r\n`. Verificar con `git diff --nums
 cambiadas deben ser pocas, no ~todo el fichero).
 
 - 07-per-executor-map.patch — W2.2b.2a: mapa PC→índice POR-EXECUTOR (miembro de CGenericMipsExecutor) + invalidación en DeleteBlock/Reset + accesor CBasicBlock::GetWasmTableIndex. SIN fast-path (no cambia ejecución). Gate: cube golden intacto + execMismatches==0. Todo #ifdef __EMSCRIPTEN__.
-- 08-fastpath-dispatch.patch — W2.2b.2b: fast-path que despacha por el mapa per-executor saltando FindBlockAt + Execute virtual, con auditoría periódica (getFastMismatches). MEDIDO: no aporta fps (vu1 −2.9%) → confirma que el cuello es el cruce C++↔wasm, no el lookup. Ver docs/BENCH-F3.md.
-- 09-module-metrics.patch — **Sprint 2 / JIT-04 paso 1 (instrumentación)**: expone getModulesCreated/getInstancesCreated/getModuleBytes. Read-only, no cambia ejecución. Pareja obligatoria de `codegen/01-module-counter.patch` (allí viven los contadores). Da el **baseline de code-space**: hoy ≈1 módulo wasm por bloque MIPS → `blocksPerModule ≈ 1`. El batching debe subir `blocksPerModule` ≥10 (modulesCreated ≥10x menos) con cube golden intacto.
+- 09-module-metrics.patch — **Sprint 2 / JIT-04 paso 1 (instrumentación)**: expone getModulesCreated/getInstancesCreated/getModuleBytes. Read-only, no cambia ejecución. Pareja obligatoria de `codegen/01-module-counter.patch` (allí viven los contadores). Da el **baseline de code-space**: hoy ≈1 módulo wasm por bloque MIPS → `blocksPerModule ≈ 1`. El batching debe subir `blocksPerModule` ≥10 (modulesCreated ≥10x menos) con cube golden intacto. **Generado sobre la serie 01–07** (no sobre el 08, que NO se aplica — ver abajo).
 
-### patches/codegen/
+### patches/codegen/ (se aplican al submódulo deps/CodeGen)
 - 01-module-counter.patch — contadores atómicos `g_ps2webModulesCreated` / `g_ps2webInstancesCreated` / `g_ps2webModuleBytes` en `src/MemoryFunction.cpp` (cada `new WebAssembly.Module` + cada `Instance`/addFunction). Definidos aquí, `extern` en Source/ui_js/Main.cpp (patch 09). Es la evidencia que cuantifica el `failed to allocate executable memory for module` de los juegos grandes (PLAN-RESCATE Fase 0 clase A / Fase 2).
+
+### patches/experiments/ (NO se aplican — fuera del glob `patches/*.patch`)
+- 08-fastpath-dispatch.patch — W2.2b.2b: fast-path que despacha por el mapa per-executor saltando FindBlockAt + el Execute virtual. **MEDIDO: no aporta fps (vu1 −2.9%, dentro de ruido)** → es la evidencia de que el cuello es el cruce C++↔wasm y no el lookup (docs/BENCH-F3.md), y por eso el ≥2x exige el loop residente (docs/SPIKE-2C.md). Se conserva como evidencia pero **queda fuera de la serie aplicada**: cambia la ejecución sin dar beneficio, o sea riesgo gratis.
+
+## Lección (2026-07-12): la serie aplicada es la que está EN EL REPO
+El CI falló al aplicar el 09 porque se generó encima del 08, que existía solo en el disco local
+y nunca se commiteó (la serie canónica es 01–07). **Regla: generar cualquier patch nuevo contra
+la serie trackeada en el repo (`git ls-files patches/`), no contra el árbol local.** Mismo error
+de clase que `bench/compat.json` (referenciado por el workflow pero sin commitear).
