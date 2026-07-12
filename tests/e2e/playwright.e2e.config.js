@@ -2,7 +2,7 @@
 const { defineConfig } = require('@playwright/test');
 module.exports = defineConfig({
   testDir: '.',
-  testMatch: 'opfs.spec.js',
+  testMatch: /(opfs|codespace)\.spec\.js/,
   timeout: 120000,
   reporter: [['list']],
   use: {
