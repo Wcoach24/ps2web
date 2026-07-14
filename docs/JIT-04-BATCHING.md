@@ -189,6 +189,67 @@ run confirma en un navegador real lo que §2 midió en V8: **el motor reclama al
 la excepción moría dentro del worker y se descartaba. El harness ahora captura `console`,
 `pageerror` y workers. **Leer el error primero; deducir después.**
 
+---
+
+## 10. v2 — COMPILACIÓN POR REGIONES (el diseño definitivo, commit a0814fd)
+
+**El diseño de dos tiers estaba mal para el caso que existía para arreglar.** Lo demostró el juego de
+Alvaro con un stack trace inapelable:
+
+```
+out of memory
+    WasmCreateBatchModule      <- nuestro código
+    _EmptyBlockHandler
+```
+
+Se quedó sin memoria ejecutable **mientras construía el módulo batch**. Porque el tier 1 **seguía
+creando un módulo por bloque** y solo los devolvía cuando pasaba el GC: allocaba **~2x** y dependía
+del recolector. En cube (1034 bloques en 20 s) el GC llega y parece un 19x. En un juego real que
+compila decenas de miles de bloques en avalancha **no llega**, y el juego muere **antes** que sin
+batching. Eso explica que una partida llegase al gameplay y la siguiente ni cargase: era una moneda
+al aire según el GC.
+
+**El estado estacionario nunca fue el problema. La avalancha lo era.**
+
+### El diseño
+Al fallar un bloque, se camina la **región** alcanzable desde esa dirección (fall-through + destinos
+de salto directo, en anchura, tope 32 bloques, solo direcciones alineadas y en rango) y se compilan
+**todos en UN módulo**. Sigue siendo compilación lazy — el bloque es ejecutable en su primer
+dispatch — pero se compilan más de golpe, lo cual es legal **precisamente porque ninguno de la
+región se ha ejecutado aún**. Sin tier solitario, **nada que liberar, cero dependencia del GC**.
+
+### Resultados (cube, run 29355727498)
+
+| | baseline (OFF) | **regiones (v2)** |
+|---|---|---|
+| **stateHashAtN** | 3049433245 | **3049433245 ✅ golden** |
+| jitBlocks compilados | 1034 | 2260 (especula ~2,2x) |
+| **modulesCreated** | **1034** | **135** |
+| **blocksPerModule** | **1,00** | **16,74** |
+| **jitCompileMs** | **129,45** | **10,62 (12x más rápido)** |
+| regionFallbacks / badInstances | 0 | **0 / 0** |
+| avgFps | 25,65 | 25,5 |
+
+**7,7x menos módulos wasm allocados**, de una sola tacada, y el golden intacto pese a compilar
+bloques especulativos. **Bonus inesperado: el JIT es 12x más rápido** — crear el módulo wasm era el
+coste dominante del JIT, no generar el código. Al crear 8x menos módulos, el warmup se desploma.
+
+### Caveats honestos
+- **La especulación compila 2,2x más bloques** de los que se ejecutan. Sale gratis en tiempo (el JIT
+  es más rápido igualmente), pero infla el código emitido. Si un juego especulase mucho peor, el
+  ratio caería. `PS2WEB_REGION_SIZE` (32) es la palanca.
+- **7,7x, no 32x**: el ratio real lo baja la especulación. Sigue siendo la diferencia entre ~19,5 MB
+  y ~2,4 MB de overhead fijo de módulos en cube.
+
+### El path de dedup me mordió TRES veces
+`CopyFunctionFrom` → `CMemoryFunction::CreateInstance()` es el sitio más traicionero del sistema:
+1. Pedía el export `codeGenFunc` en un módulo batch (que exporta `codeGenFunc0..N-1`) → `LinkError`.
+2. Instanciaba un bloque **diferido** (sin módulo aún) → `TypeError: Argument 0 must be a
+   WebAssembly.Module`. Arreglado copiando los **bytes** en vez de instanciar: el bloque se une a la
+   región como uno más. (Guardar sin más habría dejado el bloque **sin función** = trap seguro.)
+3. Y por eso ahora lleva dos fail-safes explícitos.
+**Regla: cualquier cambio en cómo un bloque obtiene su función DEBE revisar el dedup.**
+
 ### ⬜ Lo que queda
 - `CMemoryFunction` = (módulo, índice de export) en vez de (módulo, `codeGenFunc`) + glue EM_JS.
 - Acumulador de N bloques → re-emitir como 1 módulo → re-apuntar `fctId` (tabla + mapa patch 07) →
