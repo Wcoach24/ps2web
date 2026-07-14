@@ -221,10 +221,18 @@ index 3f86e4a..ac886eb 100644
  }
  
 diff --git a/src/MemoryFunction.cpp b/src/MemoryFunction.cpp
-index caae5a0..ee5a850 100644
+index caae5a0..9b53524 100644
 --- a/src/MemoryFunction.cpp
 +++ b/src/MemoryFunction.cpp
-@@ -62,6 +62,46 @@ EM_JS(void, WasmDeleteFunction, (int fctId),
+@@ -55,6 +55,7 @@ EM_JS(int, WasmCreateFunction, (emscripten::EM_VAL moduleHandle),
+ 		}
+ 	});
+ 	let fct = moduleInstance.exports.codeGenFunc;
++	if(!Module.ps2webSoloFct) Module.ps2webSoloFct = fct; //PS2WEB(JIT-04): arity reference
+ 	let fctId = addFunction(fct, 'vi');
+ 	return fctId;
+ });
+@@ -62,6 +63,56 @@ EM_JS(void, WasmDeleteFunction, (int fctId),
  {
  	removeFunction(fctId);
  });
@@ -252,6 +260,16 @@ index caae5a0..ee5a850 100644
 +	{
 +		Module.ps2webBatchFcts.push(moduleInstance.exports['codeGenFunc' + i]);
 +	}
++	//PS2WEB(JIT-04) probe: a compiled block is void(i32 context) -> arity 1. If a batched export
++	//reports a different arity than a solo one, the indirect call traps with a type mismatch on
++	//the first dispatch — which is exactly the death we are chasing. Log it once, cheaply.
++	if(!Module.ps2webArityLogged)
++	{
++		Module.ps2webArityLogged = true;
++		let f0 = Module.ps2webBatchFcts[0];
++		let soloArity = (typeof Module.ps2webSoloFct === 'function') ? Module.ps2webSoloFct.length : -1;
++		out(`PS2WEB(JIT-04) probe: batchArity=${f0 ? f0.length : -1} soloArity=${soloArity} exports=${Module.ps2webBatchFcts.length}`);
++	}
 +	return Module.ps2webBatchFcts.length;
 +});
 +// Register ONE batched function in the indirect table and hand its index back as a return value.
@@ -271,7 +289,7 @@ index caae5a0..ee5a850 100644
  EM_JS(emscripten::EM_VAL, WasmCreateModule, (uintptr_t code, uintptr_t size),
  {
  	//var fs = require('fs');
-@@ -89,6 +129,25 @@ EM_JS(emscripten::EM_VAL, WasmCreateModule, (uintptr_t code, uintptr_t size),
+@@ -89,6 +140,25 @@ EM_JS(emscripten::EM_VAL, WasmCreateModule, (uintptr_t code, uintptr_t size),
  std::atomic<uint32_t> g_ps2webModulesCreated{0};
  std::atomic<uint32_t> g_ps2webInstancesCreated{0};
  std::atomic<uint64_t> g_ps2webModuleBytes{0};
@@ -297,7 +315,7 @@ index caae5a0..ee5a850 100644
  #endif
  
  CMemoryFunction::CMemoryFunction()
-@@ -146,6 +205,7 @@ CMemoryFunction::CMemoryFunction(const void* code, size_t size)
+@@ -146,6 +216,7 @@ CMemoryFunction::CMemoryFunction(const void* code, size_t size)
  	g_ps2webModulesCreated.fetch_add(1, std::memory_order_relaxed);   // PS2WEB(JIT-04)
  	g_ps2webInstancesCreated.fetch_add(1, std::memory_order_relaxed); // PS2WEB(JIT-04)
  	g_ps2webModuleBytes.fetch_add(size, std::memory_order_relaxed);   // PS2WEB(JIT-04)
@@ -305,7 +323,7 @@ index caae5a0..ee5a850 100644
  #endif
  	ClearCache();
  #if !defined(MEMFUNC_USE_WASM)
-@@ -158,6 +218,23 @@ CMemoryFunction::~CMemoryFunction()
+@@ -158,6 +229,23 @@ CMemoryFunction::~CMemoryFunction()
  	Reset();
  }
  
@@ -329,7 +347,7 @@ index caae5a0..ee5a850 100644
  void CMemoryFunction::ClearCache()
  {
  #ifdef __APPLE__
-@@ -187,6 +264,7 @@ void CMemoryFunction::Reset()
+@@ -187,6 +275,7 @@ void CMemoryFunction::Reset()
  	m_size = 0;
  #if defined(MEMFUNC_USE_WASM)
  	m_wasmModule = emscripten::val();
@@ -337,7 +355,7 @@ index caae5a0..ee5a850 100644
  #endif
  }
  
-@@ -202,6 +280,7 @@ CMemoryFunction& CMemoryFunction::operator =(CMemoryFunction&& rhs)
+@@ -202,6 +291,7 @@ CMemoryFunction& CMemoryFunction::operator =(CMemoryFunction&& rhs)
  	std::swap(m_size, rhs.m_size);
  #if defined(MEMFUNC_USE_WASM)
  	std::swap(m_wasmModule, rhs.m_wasmModule);
@@ -345,7 +363,7 @@ index caae5a0..ee5a850 100644
  #endif
  	return (*this);
  }
-@@ -249,6 +328,7 @@ CMemoryFunction CMemoryFunction::CreateInstance()
+@@ -249,6 +339,7 @@ CMemoryFunction CMemoryFunction::CreateInstance()
  #if defined(MEMFUNC_USE_WASM)
  	CMemoryFunction result;
  	result.m_wasmModule = m_wasmModule;
@@ -353,7 +371,7 @@ index caae5a0..ee5a850 100644
  	result.m_size = m_size;
  	result.m_code = reinterpret_cast<void*>(WasmCreateFunction(m_wasmModule.as_handle()));
  	g_ps2webInstancesCreated.fetch_add(1, std::memory_order_relaxed); // PS2WEB(JIT-04)
-@@ -257,3 +337,76 @@ CMemoryFunction CMemoryFunction::CreateInstance()
+@@ -257,3 +348,76 @@ CMemoryFunction CMemoryFunction::CreateInstance()
  	return CMemoryFunction(GetCode(), GetSize());
  #endif
  }

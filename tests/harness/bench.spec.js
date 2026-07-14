@@ -14,6 +14,23 @@ const WARMUP = parseInt(process.env.BENCH_WARMUP || '5', 10);
 const BATCH_MODE = parseInt(process.env.BENCH_BATCH_MODE || '0', 10);
 
 test(`bench ${FIXTURE}`, async ({ page }) => {
+  // JIT-04: the emulator dies inside the EE pthread worker, and its exception was being thrown
+  // away. Three rounds of CI were spent reasoning about a trap nobody had actually read.
+  // Capture everything the page and its workers say, so the failure identifies itself.
+  const traps = [];
+  page.on('console', (m) => {
+    const t = m.text();
+    if (/error|trap|RuntimeError|abort|exception|unreachable|mismatch|PS2WEB/i.test(t)) {
+      traps.push(t);
+      console.log(`[jit-04] console<${m.type()}>: ${t}`);
+    }
+  });
+  page.on('pageerror', (e) => {
+    traps.push(String(e));
+    console.log(`[jit-04] pageerror: ${e.message}\n${e.stack || ''}`);
+  });
+  page.on('worker', (w) => console.log(`[jit-04] worker spawned: ${w.url().split('/').pop()}`));
+
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__ps2web && window.__ps2web.ready, null, { timeout: 60000 });
 
@@ -99,6 +116,14 @@ test(`bench ${FIXTURE}`, async ({ page }) => {
       ? fs.readFileSync(path.join(__dirname, '../../UPSTREAM.lock'), 'utf8').trim() : null,
     generatedAt: new Date().toISOString(),
   };
+
+  if (traps.length) {
+    console.log(`[jit-04] ===== ${traps.length} error/trap message(s) captured (mode ${BATCH_MODE}) =====`);
+    traps.slice(0, 30).forEach((t, i) => console.log(`[jit-04] trap#${i}: ${t}`));
+  } else {
+    console.log(`[jit-04] no error/trap messages captured (mode ${BATCH_MODE})`);
+  }
+  result.traps = traps.slice(0, 30);
 
   const suffix = BATCH_MODE === 0 ? '' : `-mode${BATCH_MODE}`;
   fs.writeFileSync(path.join(outDir, `${FIXTURE}${suffix}.json`), JSON.stringify(result, null, 2));
