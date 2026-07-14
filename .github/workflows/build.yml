@@ -210,37 +210,15 @@ jobs:
           BENCH_WARMUP: "6"
         run: npx playwright test -c tests/harness/playwright.harness.config.js
 
-      # --- JIT-04 BISECT: one build, three hypotheses. The batcher died the instant it first
-      # flushed. Mode 1 (batch + re-point, solo modules KEPT alive) vs mode 2 (also release)
-      # tells us whether the re-emitted bodies are wrong or the release path is. Both are
-      # non-fatal: we want the DATA, not a red build.
-      - name: JIT-04 bisect — cube mode 1 (re-point, NO release)
+      # JIT-04: production runs the batcher (mode 2, the default). Keep an upstream-behaviour
+      # baseline (mode 0) alongside it so any fps regression from batching is visible.
+      - name: JIT-04 baseline — cube with batcher OFF (comparison)
         continue-on-error: true
         env:
           BENCH_FIXTURE: cube
           BENCH_SECONDS: "20"
           BENCH_WARMUP: "6"
-          BENCH_BATCH_MODE: "1"
-        run: npx playwright test -c tests/harness/playwright.harness.config.js
-      - name: JIT-04 bisect — cube mode 2 (re-point + release)
-        continue-on-error: true
-        env:
-          BENCH_FIXTURE: cube
-          BENCH_SECONDS: "20"
-          BENCH_WARMUP: "6"
-          BENCH_BATCH_MODE: "2"
-        run: npx playwright test -c tests/harness/playwright.harness.config.js
-      # Mode 3 separates "building + registering the batch module" from "executing a batched
-      # body": the module is created and its 32 functions ARE added to the indirect table, but no
-      # block is re-pointed. Healthy => creation is harmless, the bodies are at fault.
-      # Dead => creating/registering the module is what breaks, not the bodies.
-      - name: JIT-04 bisect — cube mode 3 (build batch, do NOT re-point)
-        continue-on-error: true
-        env:
-          BENCH_FIXTURE: cube
-          BENCH_SECONDS: "20"
-          BENCH_WARMUP: "6"
-          BENCH_BATCH_MODE: "3"
+          BENCH_BATCH_MODE: "0"
         run: npx playwright test -c tests/harness/playwright.harness.config.js
       - name: OPFS persistence E2E (F5 W1)
         run: npx playwright test -c tests/e2e/playwright.e2e.config.js

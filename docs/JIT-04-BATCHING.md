@@ -152,7 +152,44 @@ Cambio **behavior-preserving**: el path de un bloque por módulo sigue funcionan
 en un motor wasm. Resultado: los tres válidos e instanciables, N=1 con `exports.codeGenFunc`, tabla
 de 7 tipos con `vi` en el 0. Corre en ~20 s → caza roturas de formato **antes** del build de 25 min.
 
-### ⬜ Etapa B — re-batching (lo que queda)
+### ✅ Etapa B — re-batching: FUNCIONA (commit 4a1db5b, run 29324777509)
+
+**cube, 1034 bloques:**
+
+| | modo 0 (off) | **modo 2 (producción)** |
+|---|---|---|
+| avgFps | 26,0 | **25,2** (sin regresión) |
+| **stateHashAtN** | 3049433245 | **3049433245 ✅ golden** |
+| batches / bloques batcheados | 0 / 0 | 32 / 1024 |
+| **modulesLive** | 1034 | **54** |
+| **blocksPerLiveModule** | 1,0 | **19,15** |
+| badIndices / badInstances / traps | 0 / 0 / 0 | **0 / 0 / 0** |
+
+**El batching es CORRECTO**: hash golden idéntico con los cuerpos re-emitidos ejecutándose. Era el
+riesgo abierto (que la extracción/re-emisión corrompiese la emulación) y ha caído.
+
+**Solo el modo 2 sirve.** Los modos 1 y 3 no sueltan los módulos solitarios → mantienen 1066
+módulos vivos → son **peores** que no batchear. El ahorro de code-space viene del *release*, y este
+run confirma en un navegador real lo que §2 midió en V8: **el motor reclama al soltar el módulo**.
+
+### Los tres bugs que costó (y lo que enseñan)
+1. **Move ctor sin definir.** Upstream *declara* `CMemoryFunction(CMemoryFunction&&)` y nunca lo
+   define (nadie upstream move-construye). Nuestro batching sí → `undefined symbol` en el link.
+   → Gate de linkado en `tools/wasm-emitter-check` (segundos, no 25 min).
+2. **`HEAP32` en EM_JS.** Los índices de la tabla se devolvían escribiendo
+   `HEAP32[(outIds>>2)+i]` desde el worker del pthread → la escritura se perdía → índices a 0 →
+   trap. Arreglado devolviéndolos **por valor de retorno**. (Bug real, pero *no* era la muerte.)
+3. **El bug de verdad: `CreateInstance` pedía el export equivocado.** Un módulo batch exporta
+   `codeGenFunc0..N-1`, no `codeGenFunc`. `CreateInstance()` es el path de **dedup**
+   (`CopyFunctionFrom`, §1) → leía `exports.codeGenFunc` → `undefined` → `addFunction(undefined)`
+   → `LinkError: function import requires a callable` → moría el worker.
+   **Estaba escrito como riesgo en §7 de este mismo documento y no se implementó.**
+
+**Lección de método:** se gastaron 3 ciclos de CI razonando sobre un trap que nadie había leído —
+la excepción moría dentro del worker y se descartaba. El harness ahora captura `console`,
+`pageerror` y workers. **Leer el error primero; deducir después.**
+
+### ⬜ Lo que queda
 - `CMemoryFunction` = (módulo, índice de export) en vez de (módulo, `codeGenFunc`) + glue EM_JS.
 - Acumulador de N bloques → re-emitir como 1 módulo → re-apuntar `fctId` (tabla + mapa patch 07) →
   soltar los módulos solitarios.

@@ -1,21 +1,25 @@
 diff --git a/Source/BasicBlock.cpp b/Source/BasicBlock.cpp
-index 177462fe..dc0c012a 100644
+index 177462fe..6e37f090 100644
 --- a/Source/BasicBlock.cpp
 +++ b/Source/BasicBlock.cpp
-@@ -11,6 +11,12 @@ std::atomic<uint64_t> g_ps2webJitNs{0};
+@@ -11,6 +11,16 @@ std::atomic<uint64_t> g_ps2webJitNs{0};
  std::atomic<uint32_t> g_ps2webJitBlocks{0};
  std::atomic<uint64_t> g_ps2webDispatches{0};
  std::atomic<uint32_t> g_ps2webExecMismatches{0}; // PS2WEB(F3 W2.2b.2a)
 +std::atomic<uint32_t> g_ps2webBatchSkipped{0};   // PS2WEB(JIT-04): blocks dropped from a batch (invalidated/SMC)
-+// PS2WEB(JIT-04) BISECT: 0 = batcher off (upstream behaviour), 1 = batch + re-point but KEEP the
-+// solo modules alive (no removeFunction, no release), 2 = full (re-point + release).
-+// One build, three hypotheses: if mode 1 runs clean, the batched functions are correct and the
-+// bug is in the RELEASE path; if mode 1 also dies, the lifted/re-emitted bodies are wrong.
-+std::atomic<int32_t> g_ps2webBatchMode{0};
++// PS2WEB(JIT-04): 0 = batcher off (upstream behaviour), 1 = batch + re-point but KEEP the solo
++// modules alive, 2 = FULL (re-point + release the solo modules), 3 = build the batch but never
++// re-point (diagnostic only).
++//
++// DEFAULT = 2, and it has to be 2: only releasing the solo modules actually reclaims code-space.
++// Measured on cube (1034 blocks): mode 2 takes live modules 1066 -> 54 (19.15 blocks per live
++// module); modes 1 and 3 keep all 1066 alive and are therefore WORSE than no batching at all.
++// Correctness verified in every mode: cube stateHashAtN == 3049433245 (golden), 0 traps.
++std::atomic<int32_t> g_ps2webBatchMode{2};
  // PS2WEB(F3 W2.2a): PC->wasm table-index map (foundation for chaining; NOT used for execution yet).
  #include <unordered_map>
  #include <mutex>
-@@ -130,6 +136,11 @@ void CBasicBlock::Compile()
+@@ -130,6 +140,11 @@ void CBasicBlock::Compile()
  
  	auto _ps2webT0 = std::chrono::steady_clock::now();
  	m_function = CMemoryFunction(stream.GetBuffer(), stream.GetSize());
@@ -27,7 +31,7 @@ index 177462fe..dc0c012a 100644
  	g_ps2webJitNs += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _ps2webT0).count();
  	++g_ps2webJitBlocks;
  	{
-@@ -397,6 +408,38 @@ uint32 CBasicBlock::GetWasmTableIndex() const
+@@ -397,6 +412,38 @@ uint32 CBasicBlock::GetWasmTableIndex() const
  #endif
  }
  

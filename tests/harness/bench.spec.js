@@ -9,9 +9,9 @@ const path = require('path');
 const FIXTURE = process.env.BENCH_FIXTURE || 'cube';
 const SECONDS = parseInt(process.env.BENCH_SECONDS || '30', 10);
 const WARMUP = parseInt(process.env.BENCH_WARMUP || '5', 10);
-// JIT-04 bisect: 0 = batcher off (upstream), 1 = batch+re-point but KEEP solo modules alive,
-// 2 = full (re-point + release). One build, three hypotheses.
-const BATCH_MODE = parseInt(process.env.BENCH_BATCH_MODE || '0', 10);
+// JIT-04: 0 = batcher off (upstream), 1 = batch+re-point but keep solo modules, 2 = FULL
+// (re-point + release), 3 = build but never re-point. Default 2 = what production runs.
+const BATCH_MODE = parseInt(process.env.BENCH_BATCH_MODE || '2', 10);
 
 test(`bench ${FIXTURE}`, async ({ page }) => {
   // JIT-04: the emulator dies inside the EE pthread worker, and its exception was being thrown
@@ -141,9 +141,14 @@ test(`bench ${FIXTURE}`, async ({ page }) => {
   console.log(`[jit-04] ${FIXTURE} modulesLive=${result.modulesLive} released=${result.modulesReleased} batches=${result.batchesEmitted} batchedBlocks=${result.batchedBlocks} skipped=${result.batchSkipped} blocksPerLiveModule=${result.blocksPerLiveModule}`);
   // Batching gate: with 32-block batches the live-module count must collapse. Non-fatal if the
   // fixture is too small to fill a batch, but cube/vu1 produce ~1000 blocks so it must trigger.
+  // JIT-04 production gate. Only mode 2 reclaims code-space: it releases the solo modules once
+  // their blocks live in a batch. Modes 1/3 keep them alive and are WORSE than no batching.
   if (BATCH_MODE === 2 && result.jitBlocks > 200) {
     expect(result.batchesEmitted, 'batcher must emit batch modules').toBeGreaterThan(0);
-    expect(result.blocksPerLiveModule, 'blocks per LIVE module (code-space win)').toBeGreaterThan(5);
+    expect(result.blocksPerLiveModule, 'blocks per LIVE module (the code-space win)').toBeGreaterThan(10);
+    expect(result.modulesReleased, 'solo modules must actually be released').toBeGreaterThan(0);
+    expect(result.badInstances, 'dedup must never hit a batch module with the wrong export').toBe(0);
+    expect(result.batchBadIndices, 'no invalid indirect-table indices').toBe(0);
   }
   // F3 correctness gate: cube's EE-state hash at a fixed frame is DETERMINISTIC and must not
   // change under dispatch-only JIT changes (chaining). vu1 is NOT gated on state (async VU1 =>
