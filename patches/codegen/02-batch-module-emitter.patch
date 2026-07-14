@@ -32,19 +32,20 @@ index e2f1fbe..eb404b2 100644
  		static std::map<uintptr_t, WASM_FUNCTION_INFO> m_functions;
  	};
 diff --git a/include/MemoryFunction.h b/include/MemoryFunction.h
-index fca4a0f..65a7cd6 100644
+index fca4a0f..715d8ff 100644
 --- a/include/MemoryFunction.h
 +++ b/include/MemoryFunction.h
-@@ -1,6 +1,8 @@
+@@ -1,6 +1,9 @@
  #pragma once
  
  #include "Types.h"
 +#include <memory>
++#include <cstdint>
 +#include <vector>
  
  #if defined(__EMSCRIPTEN__)
  #include <emscripten/bind.h>
-@@ -31,6 +33,16 @@ public:
+@@ -31,6 +34,16 @@ public:
  
  	CMemoryFunction CreateInstance();
  
@@ -61,13 +62,19 @@ index fca4a0f..65a7cd6 100644
  private:
  	void ClearCache();
  	void Reset();
-@@ -39,5 +51,8 @@ private:
+@@ -39,5 +52,14 @@ private:
  	size_t m_size;
  #if defined(__EMSCRIPTEN__)
  	emscripten::val m_wasmModule;
 +	//PS2WEB(JIT-04): shared refcount; its deleter decrements modulesLive when the last
 +	//CMemoryFunction backed by this module goes away.
 +	std::shared_ptr<void> m_ps2webModuleLifetime;
++	//PS2WEB(JIT-04): WHICH export of the module this function is. -1 = a solo module, whose
++	//single export is "codeGenFunc". >=0 = the i-th block of a batch module, exported as
++	//"codeGenFunc<i>". Without this, CreateInstance() (the dedup path, CopyFunctionFrom) looks
++	//up "codeGenFunc" on a BATCH module, gets undefined, and hands it to addFunction — which
++	//blows up with 'LinkError: function import requires a callable'.
++	int32_t m_ps2webBatchIndex = -1;
  #endif
  };
 diff --git a/include/WasmModuleBuilder.h b/include/WasmModuleBuilder.h
@@ -221,18 +228,35 @@ index 3f86e4a..ac886eb 100644
  }
  
 diff --git a/src/MemoryFunction.cpp b/src/MemoryFunction.cpp
-index caae5a0..9b53524 100644
+index caae5a0..a185ab2 100644
 --- a/src/MemoryFunction.cpp
 +++ b/src/MemoryFunction.cpp
-@@ -55,6 +55,7 @@ EM_JS(int, WasmCreateFunction, (emscripten::EM_VAL moduleHandle),
+@@ -45,7 +45,7 @@
+ #include <pthread.h>
+ #elif defined(MEMFUNC_USE_WASM)
+ EM_JS_DEPS(WasmMemoryFunction, "$addFunction,$removeFunction");
+-EM_JS(int, WasmCreateFunction, (emscripten::EM_VAL moduleHandle),
++EM_JS(int, WasmCreateFunction, (emscripten::EM_VAL moduleHandle, int batchIndex),
+ {
+ 	let module = Emval.toValue(moduleHandle);
+ 	let moduleInstance = new WebAssembly.Instance(module, {
+@@ -54,7 +54,14 @@ EM_JS(int, WasmCreateFunction, (emscripten::EM_VAL moduleHandle),
+ 			fctTable : Module.codeGenImportTable
  		}
  	});
- 	let fct = moduleInstance.exports.codeGenFunc;
+-	let fct = moduleInstance.exports.codeGenFunc;
++	//PS2WEB(JIT-04): a solo module exports "codeGenFunc"; a batch module exports
++	//"codeGenFunc0..N-1". Reading the wrong name yields undefined, and addFunction(undefined)
++	//falls into convertJsFunctionToWasm and dies with
++	//  LinkError: Import #0 "e" "f": function import requires a callable
++	let name = (batchIndex < 0) ? 'codeGenFunc' : ('codeGenFunc' + batchIndex);
++	let fct = moduleInstance.exports[name];
++	if(typeof fct !== 'function') return 0; //fail safe: never hand addFunction a non-callable
 +	if(!Module.ps2webSoloFct) Module.ps2webSoloFct = fct; //PS2WEB(JIT-04): arity reference
  	let fctId = addFunction(fct, 'vi');
  	return fctId;
  });
-@@ -62,6 +63,56 @@ EM_JS(void, WasmDeleteFunction, (int fctId),
+@@ -62,6 +69,56 @@ EM_JS(void, WasmDeleteFunction, (int fctId),
  {
  	removeFunction(fctId);
  });
@@ -289,7 +313,7 @@ index caae5a0..9b53524 100644
  EM_JS(emscripten::EM_VAL, WasmCreateModule, (uintptr_t code, uintptr_t size),
  {
  	//var fs = require('fs');
-@@ -89,6 +140,25 @@ EM_JS(emscripten::EM_VAL, WasmCreateModule, (uintptr_t code, uintptr_t size),
+@@ -89,6 +146,26 @@ EM_JS(emscripten::EM_VAL, WasmCreateModule, (uintptr_t code, uintptr_t size),
  std::atomic<uint32_t> g_ps2webModulesCreated{0};
  std::atomic<uint32_t> g_ps2webInstancesCreated{0};
  std::atomic<uint64_t> g_ps2webModuleBytes{0};
@@ -300,7 +324,8 @@ index caae5a0..9b53524 100644
 +std::atomic<uint32_t> g_ps2webModulesReleased{0};
 +std::atomic<uint32_t> g_ps2webBatchesEmitted{0};
 +std::atomic<uint32_t> g_ps2webBatchBadIndices{0}; // PS2WEB(JIT-04): addFunction gave back index 0
-+std::atomic<int32_t>  g_ps2webFirstBatchIndex{0};  // PS2WEB(JIT-04): so we can SEE a real index
++std::atomic<int32_t>  g_ps2webFirstBatchIndex{0};
++std::atomic<uint32_t> g_ps2webBadInstances{0};    // PS2WEB(JIT-04): CreateInstance got a non-callable export  // PS2WEB(JIT-04): so we can SEE a real index
 +std::atomic<uint32_t> g_ps2webBatchedBlocks{0};
 +
 +static std::shared_ptr<void> Ps2webMakeModuleLifetime()
@@ -315,7 +340,12 @@ index caae5a0..9b53524 100644
  #endif
  
  CMemoryFunction::CMemoryFunction()
-@@ -146,6 +216,7 @@ CMemoryFunction::CMemoryFunction(const void* code, size_t size)
+@@ -142,10 +219,11 @@ CMemoryFunction::CMemoryFunction(const void* code, size_t size)
+ #elif defined(MEMFUNC_USE_WASM)
+ 	m_wasmModule = emscripten::val::take_ownership(WasmCreateModule(reinterpret_cast<uintptr_t>(code), size));
+ 	m_size = size;
+-	m_code = reinterpret_cast<void*>(WasmCreateFunction(m_wasmModule.as_handle()));
++	m_code = reinterpret_cast<void*>(WasmCreateFunction(m_wasmModule.as_handle(), -1));
  	g_ps2webModulesCreated.fetch_add(1, std::memory_order_relaxed);   // PS2WEB(JIT-04)
  	g_ps2webInstancesCreated.fetch_add(1, std::memory_order_relaxed); // PS2WEB(JIT-04)
  	g_ps2webModuleBytes.fetch_add(size, std::memory_order_relaxed);   // PS2WEB(JIT-04)
@@ -323,7 +353,7 @@ index caae5a0..9b53524 100644
  #endif
  	ClearCache();
  #if !defined(MEMFUNC_USE_WASM)
-@@ -158,6 +229,23 @@ CMemoryFunction::~CMemoryFunction()
+@@ -158,6 +236,24 @@ CMemoryFunction::~CMemoryFunction()
  	Reset();
  }
  
@@ -341,13 +371,14 @@ index caae5a0..9b53524 100644
 +#if defined(MEMFUNC_USE_WASM)
 +	std::swap(m_wasmModule, rhs.m_wasmModule);
 +	std::swap(m_ps2webModuleLifetime, rhs.m_ps2webModuleLifetime);
++	std::swap(m_ps2webBatchIndex, rhs.m_ps2webBatchIndex);
 +#endif
 +}
 +
  void CMemoryFunction::ClearCache()
  {
  #ifdef __APPLE__
-@@ -187,6 +275,7 @@ void CMemoryFunction::Reset()
+@@ -187,6 +283,7 @@ void CMemoryFunction::Reset()
  	m_size = 0;
  #if defined(MEMFUNC_USE_WASM)
  	m_wasmModule = emscripten::val();
@@ -355,23 +386,36 @@ index caae5a0..9b53524 100644
  #endif
  }
  
-@@ -202,6 +291,7 @@ CMemoryFunction& CMemoryFunction::operator =(CMemoryFunction&& rhs)
+@@ -202,6 +299,8 @@ CMemoryFunction& CMemoryFunction::operator =(CMemoryFunction&& rhs)
  	std::swap(m_size, rhs.m_size);
  #if defined(MEMFUNC_USE_WASM)
  	std::swap(m_wasmModule, rhs.m_wasmModule);
 +	std::swap(m_ps2webModuleLifetime, rhs.m_ps2webModuleLifetime); // PS2WEB(JIT-04)
++	std::swap(m_ps2webBatchIndex, rhs.m_ps2webBatchIndex);         // PS2WEB(JIT-04)
  #endif
  	return (*this);
  }
-@@ -249,6 +339,7 @@ CMemoryFunction CMemoryFunction::CreateInstance()
+@@ -249,11 +348,96 @@ CMemoryFunction CMemoryFunction::CreateInstance()
  #if defined(MEMFUNC_USE_WASM)
  	CMemoryFunction result;
  	result.m_wasmModule = m_wasmModule;
 +	result.m_ps2webModuleLifetime = m_ps2webModuleLifetime; // PS2WEB(JIT-04): same module, no new one
++	result.m_ps2webBatchIndex = m_ps2webBatchIndex;         // PS2WEB(JIT-04): SAME export as us
  	result.m_size = m_size;
- 	result.m_code = reinterpret_cast<void*>(WasmCreateFunction(m_wasmModule.as_handle()));
+-	result.m_code = reinterpret_cast<void*>(WasmCreateFunction(m_wasmModule.as_handle()));
++	//PS2WEB(JIT-04): this is the dedup path (CBasicBlock::CopyFunctionFrom). It re-instantiates
++	//the module we are backed by — which, after batching, is a BATCH module. It must therefore
++	//ask for OUR export, not for "codeGenFunc".
++	int tableIndex = WasmCreateFunction(m_wasmModule.as_handle(), m_ps2webBatchIndex);
++	if(tableIndex == 0)
++	{
++		g_ps2webBadInstances.fetch_add(1, std::memory_order_relaxed);
++		return CMemoryFunction(); //empty: caller keeps no function rather than a bad jump
++	}
++	result.m_code = reinterpret_cast<void*>(static_cast<uintptr_t>(tableIndex));
  	g_ps2webInstancesCreated.fetch_add(1, std::memory_order_relaxed); // PS2WEB(JIT-04)
-@@ -257,3 +348,76 @@ CMemoryFunction CMemoryFunction::CreateInstance()
+ 	return result;
+ #else
  	return CMemoryFunction(GetCode(), GetSize());
  #endif
  }
@@ -441,6 +485,7 @@ index caae5a0..9b53524 100644
 +		CMemoryFunction function;
 +		function.m_wasmModule = moduleValue;        //refcounted handle to the SAME module
 +		function.m_ps2webModuleLifetime = lifetime; //last one out frees the module
++		function.m_ps2webBatchIndex = static_cast<int32_t>(i); //WHICH export we are
 +		function.m_size = size;
 +		function.m_code = reinterpret_cast<void*>(static_cast<uintptr_t>(tableIndices[i]));
 +		result.push_back(std::move(function));

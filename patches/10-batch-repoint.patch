@@ -282,10 +282,10 @@ index b0bd75ab..8715ebde 100644
  		if(m_ps2webKey.empty()) return;
  		uint32 k = pc + 1, h = ps2webExecHash(pc);
 diff --git a/Source/ui_js/Main.cpp b/Source/ui_js/Main.cpp
-index e1877de9..ae04d57f 100644
+index e1877de9..a960a5c0 100644
 --- a/Source/ui_js/Main.cpp
 +++ b/Source/ui_js/Main.cpp
-@@ -162,6 +162,18 @@ extern std::atomic<uint32_t> g_ps2webExecMismatches;
+@@ -162,6 +162,19 @@ extern std::atomic<uint32_t> g_ps2webExecMismatches;
  extern std::atomic<uint32_t> g_ps2webModulesCreated;
  extern std::atomic<uint32_t> g_ps2webInstancesCreated;
  extern std::atomic<uint64_t> g_ps2webModuleBytes;
@@ -301,10 +301,11 @@ index e1877de9..ae04d57f 100644
 +// traps on the next dispatch. badIndices>0 means the batch was aborted (fail-safe, not a crash).
 +extern std::atomic<uint32_t> g_ps2webBatchBadIndices;
 +extern std::atomic<int32_t>  g_ps2webFirstBatchIndex;
++extern std::atomic<uint32_t> g_ps2webBadInstances;
  extern std::unordered_map<uint32, uint32> g_ps2webChainMap;
  extern std::mutex g_ps2webChainMapMtx;
  uint32 ps2webChainLookup(uint32);
-@@ -172,6 +184,16 @@ int getExecMismatches() { return static_cast<int>(g_ps2webExecMismatches.load())
+@@ -172,6 +185,17 @@ int getExecMismatches() { return static_cast<int>(g_ps2webExecMismatches.load())
  int getModulesCreated() { return static_cast<int>(g_ps2webModulesCreated.load()); }
  int getInstancesCreated() { return static_cast<int>(g_ps2webInstancesCreated.load()); }
  double getModuleBytes() { return static_cast<double>(g_ps2webModuleBytes.load()); }
@@ -318,10 +319,11 @@ index e1877de9..ae04d57f 100644
 +int getBatchMode() { return static_cast<int>(g_ps2webBatchMode.load()); }
 +int getBatchBadIndices() { return static_cast<int>(g_ps2webBatchBadIndices.load()); }
 +int getFirstBatchIndex() { return static_cast<int>(g_ps2webFirstBatchIndex.load()); }
++int getBadInstances() { return static_cast<int>(g_ps2webBadInstances.load()); }
  int getChainMapEntries() { std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx); return static_cast<int>(g_ps2webChainMap.size()); }
  int getChainTableMismatches() { std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx); int bad=0; for(auto& kv : g_ps2webChainMap) if(ps2webChainLookup(kv.first) != kv.second) ++bad; return bad; }
  // PS2WEB(F3): deterministic emulation-state hash (EE base RAM, strided). Replaces the unreliable
-@@ -203,6 +225,15 @@ EMSCRIPTEN_BINDINGS(Play)
+@@ -203,6 +227,16 @@ EMSCRIPTEN_BINDINGS(Play)
  	function("getModulesCreated", &getModulesCreated);
  	function("getInstancesCreated", &getInstancesCreated);
  	function("getModuleBytes", &getModuleBytes);
@@ -334,6 +336,7 @@ index e1877de9..ae04d57f 100644
 +	function("getBatchMode", &getBatchMode);
 +	function("getBatchBadIndices", &getBatchBadIndices);
 +	function("getFirstBatchIndex", &getFirstBatchIndex);
++	function("getBadInstances", &getBadInstances);
  	function("getChainMapEntries", &getChainMapEntries);
  	function("getChainTableMismatches", &getChainTableMismatches);
  	function("getStateHash", &getStateHash);
