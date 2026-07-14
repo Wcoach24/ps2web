@@ -228,10 +228,10 @@ index 3f86e4a..ac886eb 100644
  }
  
 diff --git a/src/MemoryFunction.cpp b/src/MemoryFunction.cpp
-index caae5a0..a185ab2 100644
+index caae5a0..20539ba 100644
 --- a/src/MemoryFunction.cpp
 +++ b/src/MemoryFunction.cpp
-@@ -45,7 +45,7 @@
+@@ -45,16 +45,27 @@
  #include <pthread.h>
  #elif defined(MEMFUNC_USE_WASM)
  EM_JS_DEPS(WasmMemoryFunction, "$addFunction,$removeFunction");
@@ -239,8 +239,13 @@ index caae5a0..a185ab2 100644
 +EM_JS(int, WasmCreateFunction, (emscripten::EM_VAL moduleHandle, int batchIndex),
  {
  	let module = Emval.toValue(moduleHandle);
++	//PS2WEB(JIT-04 v2): a DEFERRED block has no module yet. Passing undefined here gives
++	//  TypeError: WebAssembly.Instance(): Argument 0 must be a WebAssembly.Module
++	//and kills the worker. Fail safe, symmetrically to the non-callable export guard below.
++	if(!(module instanceof WebAssembly.Module)) return 0;
  	let moduleInstance = new WebAssembly.Instance(module, {
-@@ -54,7 +54,14 @@ EM_JS(int, WasmCreateFunction, (emscripten::EM_VAL moduleHandle),
+ 		env: {
+ 			memory: wasmMemory,
  			fctTable : Module.codeGenImportTable
  		}
  	});
@@ -256,7 +261,7 @@ index caae5a0..a185ab2 100644
  	let fctId = addFunction(fct, 'vi');
  	return fctId;
  });
-@@ -62,6 +69,56 @@ EM_JS(void, WasmDeleteFunction, (int fctId),
+@@ -62,6 +73,56 @@ EM_JS(void, WasmDeleteFunction, (int fctId),
  {
  	removeFunction(fctId);
  });
@@ -313,7 +318,7 @@ index caae5a0..a185ab2 100644
  EM_JS(emscripten::EM_VAL, WasmCreateModule, (uintptr_t code, uintptr_t size),
  {
  	//var fs = require('fs');
-@@ -89,6 +146,26 @@ EM_JS(emscripten::EM_VAL, WasmCreateModule, (uintptr_t code, uintptr_t size),
+@@ -89,6 +150,26 @@ EM_JS(emscripten::EM_VAL, WasmCreateModule, (uintptr_t code, uintptr_t size),
  std::atomic<uint32_t> g_ps2webModulesCreated{0};
  std::atomic<uint32_t> g_ps2webInstancesCreated{0};
  std::atomic<uint64_t> g_ps2webModuleBytes{0};
@@ -340,7 +345,7 @@ index caae5a0..a185ab2 100644
  #endif
  
  CMemoryFunction::CMemoryFunction()
-@@ -142,10 +219,11 @@ CMemoryFunction::CMemoryFunction(const void* code, size_t size)
+@@ -142,10 +223,11 @@ CMemoryFunction::CMemoryFunction(const void* code, size_t size)
  #elif defined(MEMFUNC_USE_WASM)
  	m_wasmModule = emscripten::val::take_ownership(WasmCreateModule(reinterpret_cast<uintptr_t>(code), size));
  	m_size = size;
@@ -353,7 +358,7 @@ index caae5a0..a185ab2 100644
  #endif
  	ClearCache();
  #if !defined(MEMFUNC_USE_WASM)
-@@ -158,6 +236,24 @@ CMemoryFunction::~CMemoryFunction()
+@@ -158,6 +240,24 @@ CMemoryFunction::~CMemoryFunction()
  	Reset();
  }
  
@@ -378,7 +383,7 @@ index caae5a0..a185ab2 100644
  void CMemoryFunction::ClearCache()
  {
  #ifdef __APPLE__
-@@ -187,6 +283,7 @@ void CMemoryFunction::Reset()
+@@ -187,6 +287,7 @@ void CMemoryFunction::Reset()
  	m_size = 0;
  #if defined(MEMFUNC_USE_WASM)
  	m_wasmModule = emscripten::val();
@@ -386,7 +391,7 @@ index caae5a0..a185ab2 100644
  #endif
  }
  
-@@ -202,6 +299,8 @@ CMemoryFunction& CMemoryFunction::operator =(CMemoryFunction&& rhs)
+@@ -202,6 +303,8 @@ CMemoryFunction& CMemoryFunction::operator =(CMemoryFunction&& rhs)
  	std::swap(m_size, rhs.m_size);
  #if defined(MEMFUNC_USE_WASM)
  	std::swap(m_wasmModule, rhs.m_wasmModule);
@@ -395,8 +400,18 @@ index caae5a0..a185ab2 100644
  #endif
  	return (*this);
  }
-@@ -249,11 +348,96 @@ CMemoryFunction CMemoryFunction::CreateInstance()
+@@ -247,13 +350,106 @@ void CMemoryFunction::EndModify()
+ CMemoryFunction CMemoryFunction::CreateInstance()
+ {
  #if defined(MEMFUNC_USE_WASM)
++	//PS2WEB(JIT-04 v2): a deferred block carries no module. Callers must copy its bytes instead
++	//(CBasicBlock::CopyFunctionFrom does). Never hand an empty val to WebAssembly.Instance.
++	if(m_wasmModule.isUndefined() || m_wasmModule.isNull())
++	{
++		g_ps2webBadInstances.fetch_add(1, std::memory_order_relaxed);
++		return CMemoryFunction();
++	}
++
  	CMemoryFunction result;
  	result.m_wasmModule = m_wasmModule;
 +	result.m_ps2webModuleLifetime = m_ps2webModuleLifetime; // PS2WEB(JIT-04): same module, no new one

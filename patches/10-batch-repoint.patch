@@ -1,5 +1,5 @@
 diff --git a/Source/BasicBlock.cpp b/Source/BasicBlock.cpp
-index 177462fe..c11e2df3 100644
+index 177462fe..38a7d90e 100644
 --- a/Source/BasicBlock.cpp
 +++ b/Source/BasicBlock.cpp
 @@ -11,6 +11,24 @@ std::atomic<uint64_t> g_ps2webJitNs{0};
@@ -87,6 +87,27 @@ index 177462fe..c11e2df3 100644
  uint32 CBasicBlock::GetEndAddress() const
  {
  	return m_end;
+@@ -500,6 +564,20 @@ void CBasicBlock::HandleExternalFunctionReference(uintptr_t symbol, uint32 offse
+ void CBasicBlock::CopyFunctionFrom(const std::shared_ptr<CBasicBlock>& other)
+ {
+ #ifndef AOT_USE_CACHE
++#if defined(__EMSCRIPTEN__)
++	// PS2WEB(JIT-04 v2): the source block may be DEFERRED — compiled, but with no wasm module yet
++	// because its region hasn't been materialized. Instantiating it would hand an undefined module
++	// to WebAssembly.Instance:
++	//     TypeError: WebAssembly.Instance(): Argument 0 must be a WebAssembly.Module
++	// Copy its emitted BYTES instead. This block then joins the region like any other member, and
++	// the materializer gives it its own function out of the shared module. Guarding without doing
++	// this would leave the block with NO function at all, which is a guaranteed trap on dispatch.
++	if(other->m_function.IsEmpty())
++	{
++		m_ps2webModuleBytes = other->m_ps2webModuleBytes;
++	}
++	else
++#endif
+ 	m_function = other->m_function.CreateInstance();
+ 	std::copy(std::begin(other->m_linkBlockTrampolineOffset), std::end(other->m_linkBlockTrampolineOffset), m_linkBlockTrampolineOffset);
+ #ifdef _DEBUG
 diff --git a/Source/BasicBlock.h b/Source/BasicBlock.h
 index 08eed3d6..42d7d3a3 100644
 --- a/Source/BasicBlock.h
