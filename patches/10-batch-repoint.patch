@@ -1,8 +1,8 @@
 diff --git a/Source/BasicBlock.cpp b/Source/BasicBlock.cpp
-index 177462fe..38a7d90e 100644
+index 177462fe..c2bdfef8 100644
 --- a/Source/BasicBlock.cpp
 +++ b/Source/BasicBlock.cpp
-@@ -11,6 +11,24 @@ std::atomic<uint64_t> g_ps2webJitNs{0};
+@@ -11,6 +11,25 @@ std::atomic<uint64_t> g_ps2webJitNs{0};
  std::atomic<uint32_t> g_ps2webJitBlocks{0};
  std::atomic<uint64_t> g_ps2webDispatches{0};
  std::atomic<uint32_t> g_ps2webExecMismatches{0}; // PS2WEB(F3 W2.2b.2a)
@@ -24,10 +24,11 @@ index 177462fe..38a7d90e 100644
 +// blocks, once, with nothing to release and no dependence on the GC.
 +thread_local bool g_ps2webDeferModule = false;
 +std::atomic<uint32_t> g_ps2webRegionFallbacks{0}; // PS2WEB(JIT-04 v2)
++std::atomic<uint32_t> g_ps2webStaleReverts{0};    // PS2WEB(JIT-04 v2)
  // PS2WEB(F3 W2.2a): PC->wasm table-index map (foundation for chaining; NOT used for execution yet).
  #include <unordered_map>
  #include <mutex>
-@@ -129,6 +147,20 @@ void CBasicBlock::Compile()
+@@ -129,6 +148,20 @@ void CBasicBlock::Compile()
  	}
  
  	auto _ps2webT0 = std::chrono::steady_clock::now();
@@ -48,7 +49,7 @@ index 177462fe..38a7d90e 100644
  	m_function = CMemoryFunction(stream.GetBuffer(), stream.GetSize());
  	g_ps2webJitNs += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _ps2webT0).count();
  	++g_ps2webJitBlocks;
-@@ -397,6 +429,38 @@ uint32 CBasicBlock::GetWasmTableIndex() const
+@@ -397,6 +430,48 @@ uint32 CBasicBlock::GetWasmTableIndex() const
  #endif
  }
  
@@ -82,12 +83,22 @@ index 177462fe..38a7d90e 100644
 +{
 +	return std::move(m_function);
 +}
++
++uint32 CBasicBlock::Ps2webSpecSum() const
++{
++	return m_ps2webSpecSum;
++}
++
++void CBasicBlock::Ps2webSetSpecSum(uint32 sum)
++{
++	m_ps2webSpecSum = sum;
++}
 +#endif
 +
  uint32 CBasicBlock::GetEndAddress() const
  {
  	return m_end;
-@@ -500,6 +564,20 @@ void CBasicBlock::HandleExternalFunctionReference(uintptr_t symbol, uint32 offse
+@@ -500,6 +575,20 @@ void CBasicBlock::HandleExternalFunctionReference(uintptr_t symbol, uint32 offse
  void CBasicBlock::CopyFunctionFrom(const std::shared_ptr<CBasicBlock>& other)
  {
  #ifndef AOT_USE_CACHE
@@ -109,7 +120,7 @@ index 177462fe..38a7d90e 100644
  	std::copy(std::begin(other->m_linkBlockTrampolineOffset), std::end(other->m_linkBlockTrampolineOffset), m_linkBlockTrampolineOffset);
  #ifdef _DEBUG
 diff --git a/Source/BasicBlock.h b/Source/BasicBlock.h
-index 08eed3d6..42d7d3a3 100644
+index 08eed3d6..aff6ecc9 100644
 --- a/Source/BasicBlock.h
 +++ b/Source/BasicBlock.h
 @@ -1,5 +1,7 @@
@@ -120,7 +131,7 @@ index 08eed3d6..42d7d3a3 100644
  #include "MIPS.h"
  #include "MemoryFunction.h"
  #ifdef AOT_BUILD_CACHE
-@@ -81,6 +83,15 @@ public:
+@@ -81,6 +83,20 @@ public:
  	uint32 GetBeginAddress() const;
  	uint32 GetEndAddress() const;
  	uint32 GetWasmTableIndex() const; // PS2WEB(F3)
@@ -132,25 +143,31 @@ index 08eed3d6..42d7d3a3 100644
 +	// Swap this block's function for one backed by a batch module (new indirect-table index).
 +	void Ps2webRepoint(CMemoryFunction&&);
 +	CMemoryFunction Ps2webTakeFunction(); // PS2WEB(JIT-04) bisect: keep the solo module alive
++	// PS2WEB(JIT-04 v2): source checksum of a SPECULATIVELY-compiled block (0 = on-demand/verified).
++	// A commercial game DMAs code into RAM and runs it; a block compiled ahead of that load is
++	// stale. On its first real dispatch we recompute this and, on mismatch, recompile fresh.
++	uint32 Ps2webSpecSum() const;
++	void Ps2webSetSpecSum(uint32);
 +#endif
  	bool IsCompiled() const;
  	bool IsEmpty() const;
  
-@@ -127,6 +138,9 @@ private:
+@@ -127,6 +143,10 @@ private:
  
  #ifndef AOT_USE_CACHE
  	CMemoryFunction m_function;
 +#if defined(__EMSCRIPTEN__)
 +	std::vector<uint8> m_ps2webModuleBytes; // PS2WEB(JIT-04)
++	uint32 m_ps2webSpecSum = 0; // PS2WEB(JIT-04 v2)
 +#endif
  #else
  	void (*m_function)(void*);
  #endif
 diff --git a/Source/GenericMipsExecutor.h b/Source/GenericMipsExecutor.h
-index b0bd75ab..8a9fbce0 100644
+index b0bd75ab..43825ae4 100644
 --- a/Source/GenericMipsExecutor.h
 +++ b/Source/GenericMipsExecutor.h
-@@ -9,7 +9,23 @@
+@@ -9,7 +9,24 @@
  #include <atomic>
  #ifdef __EMSCRIPTEN__
  #include <vector>
@@ -164,6 +181,7 @@ index b0bd75ab..8a9fbce0 100644
 +extern std::atomic<int32_t>  g_ps2webBatchMode;      // PS2WEB(JIT-04): 0=off(upstream) 2=region batching
 +extern thread_local bool     g_ps2webDeferModule;   // PS2WEB(JIT-04 v2)
 +extern std::atomic<uint32_t> g_ps2webRegionFallbacks; // PS2WEB(JIT-04 v2): region module failed -> solo
++extern std::atomic<uint32_t> g_ps2webStaleReverts;   // PS2WEB(JIT-04 v2): speculative block was stale -> recompiled
 +// PS2WEB(JIT-04): the batcher re-points blocks, so it must keep BOTH reference maps in sync
 +// (defined in BasicBlock.cpp). If it didn't, the harness audits would go non-zero.
 +#include <unordered_map>
@@ -174,7 +192,17 @@ index b0bd75ab..8a9fbce0 100644
  #endif
  extern std::atomic<uint64_t> g_ps2webDispatches; // PS2WEB(F3): block dispatch counter
  
-@@ -150,7 +166,13 @@ protected:
+@@ -73,6 +90,9 @@ public:
+ 		{
+ 			uint32 address = m_context.m_State.nPC & m_addressMask;
+ 			auto block = m_blockLookup.FindBlockAt(address);
++#ifdef __EMSCRIPTEN__
++			block = Ps2webVerifyBlock(address, block); // PS2WEB(JIT-04 v2): speculative-block safety
++#endif
+ 			block->Execute();
+ 			g_ps2webDispatches.fetch_add(1, std::memory_order_relaxed); // PS2WEB(F3)
+ 		}
+@@ -150,7 +170,13 @@ protected:
  		ResetBlockOutLinks(block.get());
  		m_blockLookup.AddBlock(block.get());
  #ifdef __EMSCRIPTEN__
@@ -189,7 +217,7 @@ index b0bd75ab..8a9fbce0 100644
  #endif
  		m_blocks.insert(std::move(block));
  	}
-@@ -177,6 +199,7 @@ protected:
+@@ -177,6 +203,7 @@ protected:
  		m_ps2webKey[h] = k; m_ps2webVal[h] = idx;
  		if(ps2webExecLookup(pc) != idx) g_ps2webExecMismatches.fetch_add(1, std::memory_order_relaxed);
  	}
@@ -197,7 +225,7 @@ index b0bd75ab..8a9fbce0 100644
  	void ps2webExecErase(uint32 pc) {
  		if(m_ps2webKey.empty()) return;
  		uint32 k = pc + 1, h = ps2webExecHash(pc);
-@@ -252,7 +275,9 @@ protected:
+@@ -252,7 +279,9 @@ protected:
  		}
  	}
  
@@ -208,7 +236,7 @@ index b0bd75ab..8a9fbce0 100644
  	{
  		uint32 endAddress = startAddress + MAX_BLOCK_SIZE;
  		uint32 branchAddress = MIPS_INVALID_PC;
-@@ -283,6 +308,22 @@ protected:
+@@ -283,6 +312,22 @@ protected:
  				break;
  			}
  		}
@@ -231,7 +259,7 @@ index b0bd75ab..8a9fbce0 100644
  		assert((endAddress - startAddress) <= MAX_BLOCK_SIZE);
  		assert(endAddress <= m_maxAddress);
  		CreateBlock(startAddress, endAddress);
-@@ -293,6 +334,158 @@ protected:
+@@ -293,6 +338,200 @@ protected:
  		}
  	}
  
@@ -248,6 +276,42 @@ index b0bd75ab..8a9fbce0 100644
 +	// memory"). Here there is no solo tier, nothing to release, and no dependence on the GC —
 +	// module count drops ~K-fold at the moment of allocation, which is where the game actually dies.
 +	static const uint32 PS2WEB_REGION_SIZE = 32;
++
++	// PS2WEB(JIT-04 v2): cheap checksum of a block's source instructions. Used to detect that a
++	// SPECULATIVELY-compiled block was compiled from memory that has since changed (DMA/SMC).
++	uint32 Ps2webSourceSum(uint32 startAddress, uint32 endAddress)
++	{
++		uint32 sum = 2166136261u; //FNV-1a
++		for(uint32 address = startAddress; address <= endAddress; address += 4)
++		{
++			uint32 opcode = m_context.m_pMemoryMap->GetInstruction(address);
++			sum = (sum ^ opcode) * 16777619u;
++		}
++		return sum | 1u; //never 0: 0 means "not speculative / already verified"
++	}
++
++	// Called on a block right before it executes. If the block was compiled speculatively (ahead of
++	// its first real execution), re-check its source against memory now that the game may have loaded
++	// the real code. On mismatch, invalidate and recompile fresh — this is what stops a commercial
++	// game from running garbage that was pre-compiled from not-yet-loaded memory (black screen at
++	// 24fps: it runs, but wrong). On match, clear the flag: verified once, never checked again.
++	CBasicBlock* Ps2webVerifyBlock(uint32 address, CBasicBlock* block)
++	{
++		uint32 expected = block->Ps2webSpecSum();
++		if(expected == 0) return block; //on-demand or already verified: hot path, one field read
++		uint32 actual = Ps2webSourceSum(block->GetBeginAddress(), block->GetEndAddress());
++		if(actual == expected)
++		{
++			block->Ps2webSetSpecSum(0); //stable: don't check again
++			return block;
++		}
++		//Stale: the code at this address changed since we speculated it. Invalidate and recompile.
++		g_ps2webStaleReverts.fetch_add(1, std::memory_order_relaxed);
++		ClearActiveBlocksInRangeInternal(block->GetBeginAddress(), block->GetEndAddress(), nullptr);
++		PartitionFunction(address);
++		auto fresh = m_blockLookup.FindBlockAt(address);
++		return fresh;
++	}
 +
 +	void Ps2webPartitionRegion(uint32 startAddress)
 +	{
@@ -323,6 +387,12 @@ index b0bd75ab..8a9fbce0 100644
 +			{
 +				SetupBlockLinks(regionBlock.start, regionBlock.end, regionBlock.branch);
 +			}
++			// Everything except the demanded block was compiled AHEAD of execution: mark it
++			// speculative so its first real dispatch re-checks the source against memory.
++			if(regionBlock.start != startAddress)
++			{
++				block->Ps2webSetSpecSum(Ps2webSourceSum(regionBlock.start, regionBlock.end));
++			}
 +		}
 +	}
 +
@@ -391,10 +461,10 @@ index b0bd75ab..8a9fbce0 100644
  	void OrphanBlock(CBasicBlock* block)
  	{
 diff --git a/Source/ui_js/Main.cpp b/Source/ui_js/Main.cpp
-index e1877de9..27871634 100644
+index e1877de9..6f5d58b7 100644
 --- a/Source/ui_js/Main.cpp
 +++ b/Source/ui_js/Main.cpp
-@@ -162,6 +162,20 @@ extern std::atomic<uint32_t> g_ps2webExecMismatches;
+@@ -162,6 +162,21 @@ extern std::atomic<uint32_t> g_ps2webExecMismatches;
  extern std::atomic<uint32_t> g_ps2webModulesCreated;
  extern std::atomic<uint32_t> g_ps2webInstancesCreated;
  extern std::atomic<uint64_t> g_ps2webModuleBytes;
@@ -412,10 +482,11 @@ index e1877de9..27871634 100644
 +extern std::atomic<int32_t>  g_ps2webFirstBatchIndex;
 +extern std::atomic<uint32_t> g_ps2webBadInstances;
 +extern std::atomic<uint32_t> g_ps2webRegionFallbacks;
++extern std::atomic<uint32_t> g_ps2webStaleReverts;
  extern std::unordered_map<uint32, uint32> g_ps2webChainMap;
  extern std::mutex g_ps2webChainMapMtx;
  uint32 ps2webChainLookup(uint32);
-@@ -172,6 +186,18 @@ int getExecMismatches() { return static_cast<int>(g_ps2webExecMismatches.load())
+@@ -172,6 +187,19 @@ int getExecMismatches() { return static_cast<int>(g_ps2webExecMismatches.load())
  int getModulesCreated() { return static_cast<int>(g_ps2webModulesCreated.load()); }
  int getInstancesCreated() { return static_cast<int>(g_ps2webInstancesCreated.load()); }
  double getModuleBytes() { return static_cast<double>(g_ps2webModuleBytes.load()); }
@@ -431,10 +502,11 @@ index e1877de9..27871634 100644
 +int getFirstBatchIndex() { return static_cast<int>(g_ps2webFirstBatchIndex.load()); }
 +int getBadInstances() { return static_cast<int>(g_ps2webBadInstances.load()); }
 +int getRegionFallbacks() { return static_cast<int>(g_ps2webRegionFallbacks.load()); }
++int getStaleReverts() { return static_cast<int>(g_ps2webStaleReverts.load()); }
  int getChainMapEntries() { std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx); return static_cast<int>(g_ps2webChainMap.size()); }
  int getChainTableMismatches() { std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx); int bad=0; for(auto& kv : g_ps2webChainMap) if(ps2webChainLookup(kv.first) != kv.second) ++bad; return bad; }
  // PS2WEB(F3): deterministic emulation-state hash (EE base RAM, strided). Replaces the unreliable
-@@ -203,6 +229,17 @@ EMSCRIPTEN_BINDINGS(Play)
+@@ -203,6 +231,18 @@ EMSCRIPTEN_BINDINGS(Play)
  	function("getModulesCreated", &getModulesCreated);
  	function("getInstancesCreated", &getInstancesCreated);
  	function("getModuleBytes", &getModuleBytes);
@@ -449,6 +521,7 @@ index e1877de9..27871634 100644
 +	function("getFirstBatchIndex", &getFirstBatchIndex);
 +	function("getBadInstances", &getBadInstances);
 +	function("getRegionFallbacks", &getRegionFallbacks);
++	function("getStaleReverts", &getStaleReverts);
  	function("getChainMapEntries", &getChainMapEntries);
  	function("getChainTableMismatches", &getChainTableMismatches);
  	function("getStateHash", &getStateHash);

@@ -102,6 +102,7 @@ test(`bench ${FIXTURE}`, async ({ page }) => {
     firstBatchIndex: samples.length ? (samples[samples.length - 1].firstBatchIndex || 0) : 0,
     badInstances: samples.length ? (samples[samples.length - 1].badInstances || 0) : 0,
     regionFallbacks: samples.length ? (samples[samples.length - 1].regionFallbacks || 0) : 0,
+    staleReverts: samples.length ? (samples[samples.length - 1].staleReverts || 0) : 0,
     stateHash: samples.length ? (samples[samples.length - 1].stateHash || 0) : 0,
     stateHashAtN: samples.length ? (samples[samples.length - 1].stateHashAtN || 0) : 0,
     totalFrames: samples.length ? (samples[samples.length - 1].totalFrames || 0) : 0,
@@ -138,7 +139,7 @@ test(`bench ${FIXTURE}`, async ({ page }) => {
   // JIT-04 baseline (Sprint 2 checkpoint): how many wasm modules does one fixture create?
   console.log(`[jit-04] ${FIXTURE} modulesCreated=${result.modulesCreated} instancesCreated=${result.instancesCreated} moduleBytes=${result.moduleBytes} jitBlocks=${result.jitBlocks} blocksPerModule=${result.blocksPerModule}`);
   // THE number: code-space is paid for LIVE modules. Batching must push blocksPerLiveModule >> 1.
-  console.log(`[jit-04] ${FIXTURE} badIndices=${result.batchBadIndices} firstBatchIndex=${result.firstBatchIndex} badInstances=${result.badInstances} regionFallbacks=${result.regionFallbacks} <-- fallbacks>0 = a region module failed to allocate`);
+  console.log(`[jit-04] ${FIXTURE} badIndices=${result.batchBadIndices} firstBatchIndex=${result.firstBatchIndex} badInstances=${result.badInstances} regionFallbacks=${result.regionFallbacks} staleReverts=${result.staleReverts} <-- staleReverts>0 = speculative blocks were recompiled (SMC/DMA)`);
   console.log(`[jit-04] ${FIXTURE} modulesLive=${result.modulesLive} released=${result.modulesReleased} batches=${result.batchesEmitted} batchedBlocks=${result.batchedBlocks} skipped=${result.batchSkipped} blocksPerLiveModule=${result.blocksPerLiveModule}`);
   // Batching gate: with 32-block batches the live-module count must collapse. Non-fatal if the
   // fixture is too small to fill a batch, but cube/vu1 produce ~1000 blocks so it must trigger.
