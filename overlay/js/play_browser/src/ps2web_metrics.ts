@@ -13,16 +13,36 @@ export function startMetrics(playModule: any) {
   const cores = (navigator as any).hardwareConcurrency || 0;
   // PS2WEB(Sprint 2 / JIT-04): modulesCreated/instancesCreated/moduleBytes = the code-space
   // baseline. Today ~1 wasm module per MIPS block; batching must cut modulesCreated >=10x.
-  const metrics = { fps: 0, emuSpeedPct: 0, msPerFrame: 0, frameHash: null as number | null, threadsOk, cores, jitCompileMs: 0, jitBlocks: 0, blockDispatches: 0, chainMapEntries: 0, chainTableMismatches: -1, execMismatches: -1, modulesCreated: 0, instancesCreated: 0, moduleBytes: 0, blocksPerModule: 0, modulesLive: 0, modulesReleased: 0, batchesEmitted: 0, batchedBlocks: 0, batchSkipped: 0, blocksPerLiveModule: 0, batchBadIndices: 0, firstBatchIndex: 0, badInstances: 0, regionFallbacks: 0, staleReverts: 0, stateHash: 0, stateHashAtN: 0, totalFrames: 0, ts: Date.now() };
+  const metrics = { fps: 0, emuSpeedPct: 0, msPerFrame: 0, frameHash: null as number | null, threadsOk, cores, jitCompileMs: 0, jitBlocks: 0, blockDispatches: 0, chainMapEntries: 0, chainTableMismatches: -1, execMismatches: -1, modulesCreated: 0, instancesCreated: 0, moduleBytes: 0, blocksPerModule: 0, modulesLive: 0, modulesReleased: 0, batchesEmitted: 0, batchedBlocks: 0, batchSkipped: 0, blocksPerLiveModule: 0, batchBadIndices: 0, firstBatchIndex: 0, badInstances: 0, regionFallbacks: 0, staleReverts: 0, stateHash: 0, stateHashAtN: 0, totalFrames: 0,
+    // PS2WEB(FASE 0 / PROFILE-DBZ): frame-time breakdown. eeIdlePct + drawCallsPerFrame are the
+    // top-level bottleneck signals; framePct{Ee,Vu,GsStall} split the EE thread's wall time this
+    // interval; gsLoadPct is the GS thread's busy fraction; *MsS are raw per-second milliseconds.
+    eeIdlePct: 0, drawCallsPerFrame: 0, vuBlocks: 0,
+    framePctEe: 0, framePctVu: 0, framePctGsStall: 0, gsLoadPct: 0,
+    eeExecMsS: 0, vuExecMsS: 0, gsBusyMsS: 0, gsWaitMsS: 0, gsStallMsS: 0,
+    ts: Date.now() };
   (window as any).__ps2web_metrics = metrics;
+
+  // PS2WEB(FASE 0): the ns counters are cumulative-from-boot, so we diff successive reads to get a
+  // per-interval share. Kept outside the tick so warmup doesn't pollute the steady-state ratio.
+  let prevProf = { ee: 0, vu: 0, gsBusy: 0, gsWait: 0, gsStall: 0 };
 
   let last = performance.now();
   setInterval(() => {
     const now = performance.now();
     const dt = (now - last) / 1000;
     last = now;
-    let frames = 0;
-    try { frames = playModule.getFrames(); playModule.clearStats(); } catch (e) {}
+    // PS2WEB(FASE 0): draw calls + EE idle% are accumulated in StatsManager and RESET by
+    // clearStats() — read them BEFORE clearing, in the same tick as getFrames().
+    let frames = 0, drawCalls = 0, eeIdlePct = 0;
+    try {
+      frames = playModule.getFrames();
+      try { drawCalls = playModule.getDrawCalls(); } catch (e) {}
+      try { eeIdlePct = playModule.getEeIdlePct(); } catch (e) {}
+      playModule.clearStats();
+    } catch (e) {}
+    metrics.eeIdlePct = Math.round(eeIdlePct * 10) / 10;
+    metrics.drawCallsPerFrame = frames > 0 ? Math.round((drawCalls / frames) * 10) / 10 : 0;
     try { metrics.jitCompileMs = Math.round(playModule.getJitMs() * 100) / 100; metrics.jitBlocks = playModule.getJitBlocks(); } catch (e) {}
     try { metrics.blockDispatches = playModule.getDispatches(); } catch (e) {}
     try { metrics.chainMapEntries = playModule.getChainMapEntries(); } catch (e) {}
@@ -51,6 +71,25 @@ export function startMetrics(playModule: any) {
       metrics.blocksPerLiveModule = metrics.modulesLive > 0
         ? Math.round((metrics.jitBlocks / metrics.modulesLive) * 100) / 100 : 0;
     } catch (e) {}
+    // PS2WEB(FASE 0 / PROFILE-DBZ): frame-time breakdown. Cumulative ms → per-interval delta.
+    try {
+      const eeMs = playModule.getEeExecMs(), vuMs = playModule.getVuExecMs();
+      const gsBusy = playModule.getGsBusyMs(), gsWait = playModule.getGsWaitMs(), gsStall = playModule.getGsStallMs();
+      const dEe = Math.max(0, eeMs - prevProf.ee), dVu = Math.max(0, vuMs - prevProf.vu);
+      const dGsBusy = Math.max(0, gsBusy - prevProf.gsBusy), dGsWait = Math.max(0, gsWait - prevProf.gsWait), dGsStall = Math.max(0, gsStall - prevProf.gsStall);
+      prevProf = { ee: eeMs, vu: vuMs, gsBusy, gsWait, gsStall };
+      metrics.eeExecMsS = Math.round(dEe); metrics.vuExecMsS = Math.round(dVu);
+      metrics.gsBusyMsS = Math.round(dGsBusy); metrics.gsWaitMsS = Math.round(dGsWait); metrics.gsStallMsS = Math.round(dGsStall);
+      // EE-thread wall time this interval ~= dEe + dVu + dGsStall (+ IOP/SPU/other). Normalize the
+      // three we can attribute so the split reads as % of accounted EE-thread time.
+      const eeThread = dEe + dVu + dGsStall;
+      metrics.framePctEe = eeThread > 0 ? Math.round((dEe / eeThread) * 1000) / 10 : 0;
+      metrics.framePctVu = eeThread > 0 ? Math.round((dVu / eeThread) * 1000) / 10 : 0;
+      metrics.framePctGsStall = eeThread > 0 ? Math.round((dGsStall / eeThread) * 1000) / 10 : 0;
+      // GS-thread load: rasterizing vs idle. High => GS is the bottleneck (pairs with high EE idle%).
+      metrics.gsLoadPct = (dGsBusy + dGsWait) > 0 ? Math.round((dGsBusy / (dGsBusy + dGsWait)) * 1000) / 10 : 0;
+    } catch (e) {}
+    try { metrics.vuBlocks = playModule.getVuBlocks(); } catch (e) {}
     try { metrics.stateHash = playModule.getStateHash(); } catch (e) {}
     try { metrics.stateHashAtN = playModule.getStateHashAtN(); metrics.totalFrames = playModule.getTotalFrames(); } catch (e) {}
     const fps = dt > 0 ? frames / dt : 0;

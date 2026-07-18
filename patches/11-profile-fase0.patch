@@ -1,0 +1,237 @@
+diff --git a/Source/BasicBlock.cpp b/Source/BasicBlock.cpp
+index c2bdfef8..9aa64e09 100644
+--- a/Source/BasicBlock.cpp
++++ b/Source/BasicBlock.cpp
+@@ -30,6 +30,21 @@ std::atomic<int32_t> g_ps2webBatchMode{2};
+ thread_local bool g_ps2webDeferModule = false;
+ std::atomic<uint32_t> g_ps2webRegionFallbacks{0}; // PS2WEB(JIT-04 v2)
+ std::atomic<uint32_t> g_ps2webStaleReverts{0};    // PS2WEB(JIT-04 v2)
++// PS2WEB(FASE 0 / PROFILE-DBZ): frame-time breakdown. Cumulative nanoseconds, shared across
++// pthreads via linear memory. Read-only: none of these touch EE RAM, so the cube golden is
++// unaffected. steady_clock (not emscripten_get_now) to avoid a JS round-trip in the hot loop.
++//   eeExecNs  : EE thread inside CMIPS::ExecuteCpu (dispatch + block exec) — the EE-bound signal.
++//   vuExecNs  : EE thread inside VU0/VU1 Execute — the VU-bound signal (fighting game = heavy VU).
++//   gsBusyNs  : GS thread rasterizing (ReceiveCall loop) — GS load.
++//   gsWaitNs  : GS thread idle (WaitForCall) — GS slack.
++//   gsStallNs : EE thread BLOCKED on GS completion (SendGSCall waitForCompletion) — GS backpressure.
++//   vuBlocks  : VU blocks compiled fresh (== VU modules; the VU never goes through the region batcher).
++std::atomic<uint64_t> g_ps2webEeExecNs{0};
++std::atomic<uint64_t> g_ps2webVuExecNs{0};
++std::atomic<uint64_t> g_ps2webGsBusyNs{0};
++std::atomic<uint64_t> g_ps2webGsWaitNs{0};
++std::atomic<uint64_t> g_ps2webGsStallNs{0};
++std::atomic<uint32_t> g_ps2webVuBlocks{0};
+ // PS2WEB(F3 W2.2a): PC->wasm table-index map (foundation for chaining; NOT used for execution yet).
+ #include <unordered_map>
+ #include <mutex>
+diff --git a/Source/PS2VM.cpp b/Source/PS2VM.cpp
+index 5c8ded91..7e96de6f 100644
+--- a/Source/PS2VM.cpp
++++ b/Source/PS2VM.cpp
+@@ -3,6 +3,11 @@
+ #include <memory>
+ #include <climits>
+ #include <fenv.h>
++#include <atomic>
++#include <chrono>
++// PS2WEB(FASE 0 / PROFILE-DBZ): EE/VU frame-time accumulators (defined in BasicBlock.cpp).
++extern std::atomic<uint64_t> g_ps2webEeExecNs;
++extern std::atomic<uint64_t> g_ps2webVuExecNs;
+ #include "FpUtils.h"
+ #include "make_unique.h"
+ #include "string_format.h"
+@@ -721,7 +726,13 @@ void CPS2VM::UpdateEe()
+ 
+ 	while(m_eeExecutionTicks > 0)
+ 	{
++#if defined(__EMSCRIPTEN__)
++		auto _ps2webEe0 = std::chrono::steady_clock::now();
++#endif
+ 		int executed = m_ee->ExecuteCpu(m_singleStepEe ? 1 : m_eeExecutionTicks);
++#if defined(__EMSCRIPTEN__)
++		g_ps2webEeExecNs += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _ps2webEe0).count();
++#endif
+ 		if(m_ee->IsCpuIdle())
+ 		{
+ 			m_cpuUtilisation.eeIdleTicks += (m_eeExecutionTicks - executed);
+@@ -729,8 +740,14 @@ void CPS2VM::UpdateEe()
+ 		}
+ 		m_cpuUtilisation.eeTotalTicks += executed;
+ 
++#if defined(__EMSCRIPTEN__)
++		auto _ps2webVu0 = std::chrono::steady_clock::now();
++#endif
+ 		m_ee->m_vpu0->Execute(m_singleStepVu0 ? 1 : executed);
+ 		m_ee->m_vpu1->Execute(m_singleStepVu1 ? 1 : executed);
++#if defined(__EMSCRIPTEN__)
++		g_ps2webVuExecNs += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _ps2webVu0).count();
++#endif
+ 
+ 		m_eeExecutionTicks -= executed;
+ 		m_spuUpdateTicks -= (static_cast<int64>(executed) << SPU_UPDATE_TICKS_PRECISION);
+diff --git a/Source/ee/VuExecutor.cpp b/Source/ee/VuExecutor.cpp
+index 72e80fc4..ec42eea3 100644
+--- a/Source/ee/VuExecutor.cpp
++++ b/Source/ee/VuExecutor.cpp
+@@ -2,6 +2,11 @@
+ #include "VuBasicBlock.h"
+ #include "VUShared.h"
+ #include "xxhash.h"
++#include <atomic>
++// PS2WEB(FASE 0 / PROFILE-DBZ): fresh VU block compiles. The VU never goes through the region
++// batcher (CVuExecutor::PartitionFunction calls CreateBlock directly), so 1 fresh block == 1 wasm
++// module. This quantifies how much of the module churn is VU-only (defined in BasicBlock.cpp).
++extern std::atomic<uint32_t> g_ps2webVuBlocks;
+ 
+ // clang-format off
+ const CVuExecutor::BLOCK_COMPILE_HINTS CVuExecutor::g_blockCompileHints[] =
+@@ -85,6 +90,9 @@ BasicBlockPtr CVuExecutor::BlockFactory(CMIPS& context, uint32 begin, uint32 end
+ 	}
+ 
+ 	result->Compile();
++#if defined(__EMSCRIPTEN__)
++	g_ps2webVuBlocks.fetch_add(1, std::memory_order_relaxed); // PS2WEB(FASE 0): 1 fresh VU block == 1 wasm module
++#endif
+ 	if(!hasBreakpoint)
+ 	{
+ 		m_cachedBlocks.insert(std::make_pair(blockKey, result));
+diff --git a/Source/gs/GSHandler.cpp b/Source/gs/GSHandler.cpp
+index 57e58ba9..88f6ac49 100644
+--- a/Source/gs/GSHandler.cpp
++++ b/Source/gs/GSHandler.cpp
+@@ -11,6 +11,12 @@
+ #include "GsPixelFormats.h"
+ #include "string_format.h"
+ #include "ThreadUtils.h"
++#include <atomic>
++#include <chrono>
++// PS2WEB(FASE 0 / PROFILE-DBZ): GS thread breakdown (defined in BasicBlock.cpp). Read-only.
++extern std::atomic<uint64_t> g_ps2webGsBusyNs;
++extern std::atomic<uint64_t> g_ps2webGsWaitNs;
++extern std::atomic<uint64_t> g_ps2webGsStallNs;
+ 
+ //Shadow Hearts 2 looks for this specific value
+ #define GS_REVISION (7)
+@@ -2175,11 +2181,25 @@ void CGSHandler::ThreadProc()
+ {
+ 	while(!m_threadDone)
+ 	{
++#if defined(__EMSCRIPTEN__)
++		// PS2WEB(FASE 0): time spent idle (WaitForCall) vs rasterizing (ReceiveCall). A high
++		// gsBusy/(gsBusy+gsWait) ratio means the GS thread is the bottleneck.
++		auto _ps2webGsW0 = std::chrono::steady_clock::now();
+ 		m_mailBox.WaitForCall();
++		auto _ps2webGsB0 = std::chrono::steady_clock::now();
++		g_ps2webGsWaitNs += std::chrono::duration_cast<std::chrono::nanoseconds>(_ps2webGsB0 - _ps2webGsW0).count();
+ 		while(m_mailBox.IsPending())
+ 		{
+ 			m_mailBox.ReceiveCall();
+ 		}
++		g_ps2webGsBusyNs += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _ps2webGsB0).count();
++#else
++		m_mailBox.WaitForCall();
++		while(m_mailBox.IsPending())
++		{
++			m_mailBox.ReceiveCall();
++		}
++#endif
+ 	}
+ }
+ 
+@@ -2190,6 +2210,17 @@ void CGSHandler::SendGSCall(const CMailBox::FunctionType& function, bool waitFor
+ 		waitForCompletion = false;
+ 	}
+ 	waitForCompletion |= forceWaitForCompletion;
++#if defined(__EMSCRIPTEN__)
++	// PS2WEB(FASE 0): the EE thread blocks here when it needs the GS to finish (Flip WAIT / Finish /
++	// SyncMemoryCache). This is GS backpressure measured on the EE side — pair it with high EE idle%.
++	if(waitForCompletion)
++	{
++		auto _ps2webGsS0 = std::chrono::steady_clock::now();
++		m_mailBox.SendCall(function, waitForCompletion);
++		g_ps2webGsStallNs += std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - _ps2webGsS0).count();
++		return;
++	}
++#endif
+ 	m_mailBox.SendCall(function, waitForCompletion);
+ }
+ 
+diff --git a/Source/ui_js/Main.cpp b/Source/ui_js/Main.cpp
+index 6f5d58b7..0f2403dc 100644
+--- a/Source/ui_js/Main.cpp
++++ b/Source/ui_js/Main.cpp
+@@ -16,6 +16,7 @@
+ CPs2VmJs* g_virtualMachine = nullptr;
+ CGSHandler::NewFrameEvent::Connection g_gsNewFrameConnection;
+ CGSHandler::NewFrameEvent::Connection g_ps2webFrameConnection;   // PS2WEB(F3)
++CPS2VM::NewFrameEvent::Connection g_ps2webCpuUtilConnection;     // PS2WEB(FASE 0): feeds EE idle% + draw calls
+ std::atomic<uint32_t> g_ps2webTotalFrames{0};                    // PS2WEB(F3): cumulative emulated frames
+ std::atomic<uint32_t> g_ps2webStateHashAtN{0};                   // PS2WEB(F3): EE-RAM hash at a fixed frame
+ static const uint32_t PS2WEB_STATE_FRAME = 180;
+@@ -123,6 +124,9 @@ extern "C" void initVm()
+ 		uint32 n = g_ps2webTotalFrames.fetch_add(1, std::memory_order_relaxed) + 1;
+ 		if(n == PS2WEB_STATE_FRAME) g_ps2webStateHashAtN.store(static_cast<uint32>(getStateHash()), std::memory_order_relaxed);
+ 	});
++	// PS2WEB(FASE 0): wire the VM frame event to CStatsManager so eeIdle/eeTotal ticks accumulate
++	// (upstream ios/qt do this; the JS build never did → getEeIdlePct would read zeros without it).
++	g_ps2webCpuUtilConnection = g_virtualMachine->OnNewFrame.Connect(std::bind(&CStatsManager::OnNewFrame, &CStatsManager::GetInstance(), g_virtualMachine));
+ 
+ 	EMSCRIPTEN_RESULT result = EMSCRIPTEN_RESULT_SUCCESS;
+ 
+@@ -177,6 +181,13 @@ extern std::atomic<int32_t>  g_ps2webFirstBatchIndex;
+ extern std::atomic<uint32_t> g_ps2webBadInstances;
+ extern std::atomic<uint32_t> g_ps2webRegionFallbacks;
+ extern std::atomic<uint32_t> g_ps2webStaleReverts;
++// PS2WEB(FASE 0 / PROFILE-DBZ): frame-time breakdown accumulators (cumulative ns) + VU block count.
++extern std::atomic<uint64_t> g_ps2webEeExecNs;
++extern std::atomic<uint64_t> g_ps2webVuExecNs;
++extern std::atomic<uint64_t> g_ps2webGsBusyNs;
++extern std::atomic<uint64_t> g_ps2webGsWaitNs;
++extern std::atomic<uint64_t> g_ps2webGsStallNs;
++extern std::atomic<uint32_t> g_ps2webVuBlocks;
+ extern std::unordered_map<uint32, uint32> g_ps2webChainMap;
+ extern std::mutex g_ps2webChainMapMtx;
+ uint32 ps2webChainLookup(uint32);
+@@ -200,6 +211,26 @@ int getFirstBatchIndex() { return static_cast<int>(g_ps2webFirstBatchIndex.load(
+ int getBadInstances() { return static_cast<int>(g_ps2webBadInstances.load()); }
+ int getRegionFallbacks() { return static_cast<int>(g_ps2webRegionFallbacks.load()); }
+ int getStaleReverts() { return static_cast<int>(g_ps2webStaleReverts.load()); }
++// PS2WEB(FASE 0 / PROFILE-DBZ): frame-time breakdown. Counters are cumulative nanoseconds; exposed
++// here as cumulative MILLISECONDS. The overlay diffs successive reads to get a per-interval share.
++double getEeExecMs() { return g_ps2webEeExecNs.load() / 1e6; }
++double getVuExecMs() { return g_ps2webVuExecNs.load() / 1e6; }
++double getGsBusyMs() { return g_ps2webGsBusyNs.load() / 1e6; }
++double getGsWaitMs() { return g_ps2webGsWaitNs.load() / 1e6; }
++double getGsStallMs() { return g_ps2webGsStallNs.load() / 1e6; }
++int getVuBlocks() { return static_cast<int>(g_ps2webVuBlocks.load()); }
++// PS2WEB(FASE 0): EE idle % over the current stats interval (StatsManager accumulates per frame,
++// clearStats resets it). High idle% => the EE is starved (GS/VU/sync bound), NOT EE-bound.
++double getEeIdlePct()
++{
++	auto info = CStatsManager::GetInstance().GetCpuUtilisationInfo();
++	if(info.eeTotalTicks <= 0) return 0.0;
++	int32 idle = (info.eeIdleTicks > 0) ? info.eeIdleTicks : 0;
++	return (static_cast<double>(idle) / static_cast<double>(info.eeTotalTicks)) * 100.0;
++}
++// PS2WEB(FASE 0): draw calls accumulated over the current stats interval (GS load). Read this
++// together with getFrames() BEFORE clearStats() to get draw calls per frame.
++int getDrawCalls() { return static_cast<int>(CStatsManager::GetInstance().GetDrawCalls()); }
+ int getChainMapEntries() { std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx); return static_cast<int>(g_ps2webChainMap.size()); }
+ int getChainTableMismatches() { std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx); int bad=0; for(auto& kv : g_ps2webChainMap) if(ps2webChainLookup(kv.first) != kv.second) ++bad; return bad; }
+ // PS2WEB(F3): deterministic emulation-state hash (EE base RAM, strided). Replaces the unreliable
+@@ -243,6 +274,15 @@ EMSCRIPTEN_BINDINGS(Play)
+ 	function("getBadInstances", &getBadInstances);
+ 	function("getRegionFallbacks", &getRegionFallbacks);
+ 	function("getStaleReverts", &getStaleReverts);
++	// PS2WEB(FASE 0 / PROFILE-DBZ): frame-time breakdown + EE idle% + draw calls + VU block count.
++	function("getEeExecMs", &getEeExecMs);
++	function("getVuExecMs", &getVuExecMs);
++	function("getGsBusyMs", &getGsBusyMs);
++	function("getGsWaitMs", &getGsWaitMs);
++	function("getGsStallMs", &getGsStallMs);
++	function("getVuBlocks", &getVuBlocks);
++	function("getEeIdlePct", &getEeIdlePct);
++	function("getDrawCalls", &getDrawCalls);
+ 	function("getChainMapEntries", &getChainMapEntries);
+ 	function("getChainTableMismatches", &getChainTableMismatches);
+ 	function("getStateHash", &getStateHash);
