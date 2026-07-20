@@ -1,0 +1,100 @@
+diff --git a/Source/BasicBlock.cpp b/Source/BasicBlock.cpp
+index 9aa64e09..23917b95 100644
+--- a/Source/BasicBlock.cpp
++++ b/Source/BasicBlock.cpp
+@@ -45,6 +45,12 @@ std::atomic<uint64_t> g_ps2webGsBusyNs{0};
+ std::atomic<uint64_t> g_ps2webGsWaitNs{0};
+ std::atomic<uint64_t> g_ps2webGsStallNs{0};
+ std::atomic<uint32_t> g_ps2webVuBlocks{0};
++// PS2WEB(FASE 1C): GS frameskip. 0 = off (every frame rendered — DEFAULT, so cube golden and the
++// upstream path are untouched). n>0 = render 1 of every (n+1) frames; the GS thread drops the
++// per-primitive draws of skipped frames (DoRenderPass early-returns), so the saturated GS thread
++// drains faster and the EE — which measured 87% idle, 77% blocked on the GS — stops stalling.
++// Runtime kill-switch: setGsFrameskip(n). Presentation-only: never touches EE RAM.
++std::atomic<int32_t> g_ps2webGsFrameskip{0};
+ // PS2WEB(F3 W2.2a): PC->wasm table-index map (foundation for chaining; NOT used for execution yet).
+ #include <unordered_map>
+ #include <mutex>
+diff --git a/Source/gs/GSH_OpenGL/GSH_OpenGL.cpp b/Source/gs/GSH_OpenGL/GSH_OpenGL.cpp
+index 7eb9460f..691d6405 100644
+--- a/Source/gs/GSH_OpenGL/GSH_OpenGL.cpp
++++ b/Source/gs/GSH_OpenGL/GSH_OpenGL.cpp
+@@ -7,6 +7,14 @@
+ #include "../GsPixelFormats.h"
+ #include "../GsTransferRange.h"
+ #include "GSH_OpenGL.h"
++#include <atomic>
++// PS2WEB(FASE 1C): GS frameskip (defined in BasicBlock.cpp). Set from JS via setGsFrameskip(n).
++// s_ps2web* are read/written ONLY on the GS thread (FlipImpl + DoRenderPass) → no race.
++extern std::atomic<int32_t> g_ps2webGsFrameskip;
++#if defined(__EMSCRIPTEN__)
++static uint32 s_ps2webGsFrameIndex = 0;
++static bool s_ps2webSkipDraw = false;
++#endif
+ 
+ #ifdef USE_DUALSOURCE_BLENDING
+ //Dual source blending constants
+@@ -242,6 +250,18 @@ void CGSH_OpenGL::FlipImpl(const DISPLAY_INFO& dispInfo)
+ 
+ 	PresentBackbuffer();
+ 	CGSHandler::FlipImpl(dispInfo);
++
++#if defined(__EMSCRIPTEN__)
++	// PS2WEB(FASE 1C): decide whether the UPCOMING frame is rendered or skipped. Done at end of Flip
++	// so this frame's primitives (already flushed above) used the previous decision. n=0 => never
++	// skip (default). n>0 => skip n of every n+1 frames. The present/composite above always runs, so
++	// a skipped frame simply re-shows the last rendered image instead of freezing the canvas.
++	{
++		int32 n = g_ps2webGsFrameskip.load(std::memory_order_relaxed);
++		s_ps2webGsFrameIndex++;
++		s_ps2webSkipDraw = (n > 0) && ((s_ps2webGsFrameIndex % (static_cast<uint32>(n) + 1u)) != 0u);
++	}
++#endif
+ }
+ 
+ void CGSH_OpenGL::LoadState(Framework::CZipArchiveReader& archive)
+@@ -1724,6 +1744,13 @@ void CGSH_OpenGL::FlushVertexBuffer()
+ 
+ void CGSH_OpenGL::DoRenderPass()
+ {
++#if defined(__EMSCRIPTEN__)
++	// PS2WEB(FASE 1C frameskip): on a skipped frame, drop this primitive batch's GPU work (uniform
++	// upload + state apply + glDrawArrays). m_validGlState is left untouched, so the next RENDERED
++	// frame re-applies whatever it needs; the pending vertices are cleared by FlushVertexBuffer after
++	// we return. Not counted in m_drawCallCount so drawCallsPerFrame reflects real GPU draws.
++	if(s_ps2webSkipDraw) return;
++#endif
+ 	if((m_validGlState & GLSTATE_VERTEX_PARAMS) == 0)
+ 	{
+ 		glBindBuffer(GL_UNIFORM_BUFFER, m_vertexParamsBuffer);
+diff --git a/Source/ui_js/Main.cpp b/Source/ui_js/Main.cpp
+index 0f2403dc..35feba66 100644
+--- a/Source/ui_js/Main.cpp
++++ b/Source/ui_js/Main.cpp
+@@ -188,6 +188,7 @@ extern std::atomic<uint64_t> g_ps2webGsBusyNs;
+ extern std::atomic<uint64_t> g_ps2webGsWaitNs;
+ extern std::atomic<uint64_t> g_ps2webGsStallNs;
+ extern std::atomic<uint32_t> g_ps2webVuBlocks;
++extern std::atomic<int32_t>  g_ps2webGsFrameskip; // PS2WEB(FASE 1C)
+ extern std::unordered_map<uint32, uint32> g_ps2webChainMap;
+ extern std::mutex g_ps2webChainMapMtx;
+ uint32 ps2webChainLookup(uint32);
+@@ -231,6 +232,9 @@ double getEeIdlePct()
+ // PS2WEB(FASE 0): draw calls accumulated over the current stats interval (GS load). Read this
+ // together with getFrames() BEFORE clearStats() to get draw calls per frame.
+ int getDrawCalls() { return static_cast<int>(CStatsManager::GetInstance().GetDrawCalls()); }
++// PS2WEB(FASE 1C): GS frameskip kill-switch. 0=off (default). n>0 renders 1 of every n+1 frames.
++void setGsFrameskip(int n) { g_ps2webGsFrameskip.store(n < 0 ? 0 : n); }
++int getGsFrameskip() { return static_cast<int>(g_ps2webGsFrameskip.load()); }
+ int getChainMapEntries() { std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx); return static_cast<int>(g_ps2webChainMap.size()); }
+ int getChainTableMismatches() { std::lock_guard<std::mutex> _l(g_ps2webChainMapMtx); int bad=0; for(auto& kv : g_ps2webChainMap) if(ps2webChainLookup(kv.first) != kv.second) ++bad; return bad; }
+ // PS2WEB(F3): deterministic emulation-state hash (EE base RAM, strided). Replaces the unreliable
+@@ -283,6 +287,8 @@ EMSCRIPTEN_BINDINGS(Play)
+ 	function("getVuBlocks", &getVuBlocks);
+ 	function("getEeIdlePct", &getEeIdlePct);
+ 	function("getDrawCalls", &getDrawCalls);
++	function("setGsFrameskip", &setGsFrameskip);
++	function("getGsFrameskip", &getGsFrameskip);
+ 	function("getChainMapEntries", &getChainMapEntries);
+ 	function("getChainTableMismatches", &getChainTableMismatches);
+ 	function("getStateHash", &getStateHash);

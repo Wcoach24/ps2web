@@ -20,6 +20,7 @@ export function startMetrics(playModule: any) {
     eeIdlePct: 0, drawCallsPerFrame: 0, vuBlocks: 0,
     framePctEe: 0, framePctVu: 0, framePctGsStall: 0, gsLoadPct: 0,
     eeExecMsS: 0, vuExecMsS: 0, gsBusyMsS: 0, gsWaitMsS: 0, gsStallMsS: 0,
+    gsFrameskip: 0, // PS2WEB(FASE 1C): 0=off. Set via __ps2web.setFrameskip(n) or PlayModule.setGsFrameskip(n).
     ts: Date.now() };
   (window as any).__ps2web_metrics = metrics;
 
@@ -90,6 +91,7 @@ export function startMetrics(playModule: any) {
       metrics.gsLoadPct = (dGsBusy + dGsWait) > 0 ? Math.round((dGsBusy / (dGsBusy + dGsWait)) * 1000) / 10 : 0;
     } catch (e) {}
     try { metrics.vuBlocks = playModule.getVuBlocks(); } catch (e) {}
+    try { metrics.gsFrameskip = playModule.getGsFrameskip(); } catch (e) {}
     try { metrics.stateHash = playModule.getStateHash(); } catch (e) {}
     try { metrics.stateHashAtN = playModule.getStateHashAtN(); metrics.totalFrames = playModule.getTotalFrames(); } catch (e) {}
     const fps = dt > 0 ? frames / dt : 0;
@@ -103,6 +105,8 @@ export function startMetrics(playModule: any) {
   (window as any).__ps2web = {
     ready: true,
     diskStore: DiskStore,
+    // PS2WEB(FASE 1C): GS frameskip kill-switch. n=0 off; n>0 renders 1 of every n+1 frames.
+    setFrameskip(n: number) { try { playModule.setGsFrameskip(n | 0); } catch (e) {} return n; },
     async importAndSave(url: string) { // fetch a served fixture and persist to OPFS
       const bytes = new Uint8Array(await (await fetch(url)).arrayBuffer());
       const name = (url.split('/').pop() || 'game.elf');
